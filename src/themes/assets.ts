@@ -55,12 +55,14 @@ function expandAssetKey(key: string): string[] {
 
 /**
  * Validate a single theme's image keys against {@link ALLOWED_ASSET_KEYS}.
- * Returns the list of unknown keys (empty when the theme is valid). Pure.
+ * Returns the list of unknown keys (empty when the theme is valid). An empty
+ * key means "no image in this slot" and is never unknown. Pure.
  */
 export function findUnknownAssetKeys(theme: Theme): string[] {
   const keys = [theme.largeImage.key, theme.smallImage.key];
   const unknown: string[] = [];
   for (const key of keys) {
+    if (key === '') continue;
     for (const resolved of expandAssetKey(key)) {
       if (!ALLOWED_ASSET_KEYS.has(resolved)) unknown.push(resolved);
     }

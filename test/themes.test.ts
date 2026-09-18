@@ -24,9 +24,17 @@ test('findUnknownAssetKeys flags an unknown key', () => {
   assert.equal(validateThemeAssets(broken), false);
 });
 
-test('status-{state} expands to the full activity-state family and all are valid', () => {
-  // minimal uses `status-{state}`; it must validate, proving the family is allowed.
+test('an empty asset key means "no image" and is not flagged', () => {
+  // minimal ships with no small image; the empty key must validate, not be flagged.
+  assert.equal(THEMES.minimal!.smallImage.key, '');
+  assert.deepEqual(findUnknownAssetKeys(THEMES.minimal!), []);
   assert.equal(validateThemeAssets(THEMES.minimal!), true);
+});
+
+test('status-{state} expands to the full activity-state family and all are valid', () => {
+  // playful uses `status-{state}`; it must validate, proving the family is allowed.
+  assert.equal(THEMES.playful!.smallImage.key, 'status-{state}');
+  assert.equal(validateThemeAssets(THEMES.playful!), true);
 });
 
 // Registry / picker parity: the manifest is the single source of truth. Assert
