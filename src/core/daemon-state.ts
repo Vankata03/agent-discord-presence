@@ -1,17 +1,22 @@
 /**
- * Daemon liveness primitives: the singleton lockfile and a small status file.
+ * Daemon liveness primitives: the singleton lockfile and a small status file,
+ * both under the presence directory the DaemonState is rooted at.
  *
  * Kept separate from the daemon itself (and free of the Discord dependency) so
- * `vdp status` can read daemon health without pulling in the RPC library.
+ * `vdp status` and the hook path can read daemon health without pulling in the
+ * RPC library.
  *
  * The lock holds the daemon's pid. Acquisition is atomic via exclusive create
  * (`wx`); if the existing lock points at a dead pid it's treated as stale and
  * taken over — this is how we recover after a crash where the lock outlived the
- * process.
+ * process. The pid and the liveness probe are injectable so lock takeover is
+ * testable without spawning processes.
  */
-import { mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, rmSync, writeFileSync } from 'node:fs';
+import { join } from 'node:path';
 import { spawn } from 'node:child_process';
-import { entryPath, lockPath, presenceDir, statePath } from './paths';
+import { readJson, writeJsonAtomic } from './json-file';
+import { entryPath } from './paths';
 
 export interface LockInfo {
   pid: number;
@@ -29,10 +34,6 @@ export interface DaemonStatus {
 /** A daemon status older than this is treated as stale (daemon likely gone). */
 export const DAEMON_STATUS_STALE_MS = 60 * 1000;
 
-function stripBom(s: string): string {
-  return s.charCodeAt(0) === 0xfeff ? s.slice(1) : s;
-}
-
 export function isProcessAlive(pid: number): boolean {
   try {
     process.kill(pid, 0);
@@ -43,110 +44,124 @@ export function isProcessAlive(pid: number): boolean {
   }
 }
 
-export function readLock(): LockInfo | null {
-  try {
-    return JSON.parse(stripBom(readFileSync(lockPath(), 'utf8'))) as LockInfo;
-  } catch {
-    return null;
-  }
+export interface DaemonStateOptions {
+  /** The pid that owns locks acquired through this instance. */
+  pid?: number;
+  /** Liveness probe for pids found in the lock. */
+  isAlive?: (pid: number) => boolean;
 }
 
-/**
- * Try to become the one daemon. Returns true on success. Fails (returns false)
- * only when another live daemon already holds the lock.
- */
-export function acquireLock(now: number): boolean {
-  mkdirSync(presenceDir(), { recursive: true });
-  const payload = JSON.stringify({ pid: process.pid, startedAt: now } satisfies LockInfo);
+export class DaemonState {
+  readonly lockPath: string;
+  readonly statusPath: string;
+  private readonly root: string;
+  private readonly pid: number;
+  private readonly isAlive: (pid: number) => boolean;
 
-  for (let attempt = 0; attempt < 2; attempt++) {
-    try {
-      writeFileSync(lockPath(), payload, { flag: 'wx' });
-      return true;
-    } catch (err) {
-      if ((err as NodeJS.ErrnoException).code !== 'EEXIST') return false;
-      const existing = readLock();
-      if (existing && existing.pid !== process.pid && isProcessAlive(existing.pid)) {
-        return false; // another live daemon owns it
-      }
-      // Stale (or ours) — clear it and retry the exclusive create.
+  /** `root` is the presence directory, shared with the store and the config. */
+  constructor(root: string, options: DaemonStateOptions = {}) {
+    this.root = root;
+    this.lockPath = join(root, 'daemon.lock');
+    this.statusPath = join(root, 'state.json');
+    this.pid = options.pid ?? process.pid;
+    this.isAlive = options.isAlive ?? isProcessAlive;
+  }
+
+  readLock(): LockInfo | null {
+    return readJson<LockInfo>(this.lockPath);
+  }
+
+  /**
+   * Try to become the one daemon. Returns true on success. Fails (returns false)
+   * only when another live daemon already holds the lock.
+   */
+  acquireLock(now: number): boolean {
+    mkdirSync(this.root, { recursive: true });
+    const payload = JSON.stringify({ pid: this.pid, startedAt: now } satisfies LockInfo);
+
+    for (let attempt = 0; attempt < 2; attempt++) {
       try {
-        rmSync(lockPath());
+        // Exclusive create is the atomic step, so this write bypasses the
+        // temp-then-rename recipe on purpose.
+        writeFileSync(this.lockPath, payload, { flag: 'wx' });
+        return true;
+      } catch (err) {
+        if ((err as NodeJS.ErrnoException).code !== 'EEXIST') return false;
+        const existing = this.readLock();
+        if (existing && existing.pid !== this.pid && this.isAlive(existing.pid)) {
+          return false; // another live daemon owns it
+        }
+        // Stale (or ours) — clear it and retry the exclusive create.
+        try {
+          rmSync(this.lockPath);
+        } catch {
+          // someone else may have just cleared it; the retry settles the race
+        }
+      }
+    }
+    return false;
+  }
+
+  /** Release the lock, but only if we still own it. */
+  releaseLock(): void {
+    const existing = this.readLock();
+    if (existing && existing.pid === this.pid) {
+      try {
+        rmSync(this.lockPath);
       } catch {
-        // someone else may have just cleared it; the retry settles the race
+        // already gone — fine
       }
     }
   }
-  return false;
-}
 
-/** Release the lock, but only if we still own it. */
-export function releaseLock(): void {
-  const existing = readLock();
-  if (existing && existing.pid === process.pid) {
+  writeStatus(status: DaemonStatus): void {
     try {
-      rmSync(lockPath());
+      writeJsonAtomic(this.statusPath, status);
+    } catch {
+      // status file is best-effort telemetry; never fatal
+    }
+  }
+
+  readStatus(): DaemonStatus | null {
+    return readJson<DaemonStatus>(this.statusPath);
+  }
+
+  clearStatus(): void {
+    try {
+      rmSync(this.statusPath);
     } catch {
       // already gone — fine
     }
   }
-}
 
-export function writeDaemonStatus(status: DaemonStatus): void {
-  try {
-    mkdirSync(presenceDir(), { recursive: true });
-    const dest = statePath();
-    const tmp = `${dest}.${process.pid}.tmp`;
-    writeFileSync(tmp, JSON.stringify(status));
-    renameSync(tmp, dest);
-  } catch {
-    // status file is best-effort telemetry; never fatal
+  /**
+   * Stop the running daemon, if any. Sends SIGTERM (graceful on POSIX — the
+   * daemon clears its presence and releases its lock; on Windows this
+   * terminates it, and Discord clears the presence when the socket closes).
+   * Waits for it to exit so a follow-up spawn/delete can't race a still-living
+   * daemon. Returns the stopped pid, or null if none was running.
+   */
+  async stop(timeoutMs = 2000): Promise<number | null> {
+    const lock = this.readLock();
+    if (!lock || !this.isAlive(lock.pid)) return null;
+    try {
+      process.kill(lock.pid, 'SIGTERM');
+    } catch {
+      return null; // already gone, or not ours to signal
+    }
+    await this.waitForExit(lock.pid, timeoutMs);
+    return lock.pid;
   }
-}
 
-export function readDaemonStatus(): DaemonStatus | null {
-  try {
-    return JSON.parse(stripBom(readFileSync(statePath(), 'utf8'))) as DaemonStatus;
-  } catch {
-    return null;
+  /** Resolve after the pid is gone, or after `timeoutMs`. Returns true if it died. */
+  private async waitForExit(pid: number, timeoutMs: number): Promise<boolean> {
+    const step = 100;
+    for (let waited = 0; waited < timeoutMs; waited += step) {
+      if (!this.isAlive(pid)) return true;
+      await new Promise((r) => setTimeout(r, step));
+    }
+    return !this.isAlive(pid);
   }
-}
-
-export function clearDaemonStatus(): void {
-  try {
-    rmSync(statePath());
-  } catch {
-    // already gone — fine
-  }
-}
-
-/** Resolve after the pid is gone, or after `timeoutMs`. Returns true if it died. */
-async function waitForExit(pid: number, timeoutMs: number): Promise<boolean> {
-  const step = 100;
-  for (let waited = 0; waited < timeoutMs; waited += step) {
-    if (!isProcessAlive(pid)) return true;
-    await new Promise((r) => setTimeout(r, step));
-  }
-  return !isProcessAlive(pid);
-}
-
-/**
- * Stop the running daemon, if any. Sends SIGTERM (graceful on POSIX — the daemon
- * clears its presence and releases its lock; on Windows this terminates it, and
- * Discord clears the presence when the socket closes). Waits for it to exit so a
- * follow-up spawn/delete can't race a still-living daemon. Returns the stopped
- * pid, or null if none was running.
- */
-export async function stopDaemon(timeoutMs = 2000): Promise<number | null> {
-  const lock = readLock();
-  if (!lock || !isProcessAlive(lock.pid)) return null;
-  try {
-    process.kill(lock.pid, 'SIGTERM');
-  } catch {
-    return null; // already gone, or not ours to signal
-  }
-  await waitForExit(lock.pid, timeoutMs);
-  return lock.pid;
 }
 
 /** Spawn a detached daemon from the built entry. Best-effort, never throws. */

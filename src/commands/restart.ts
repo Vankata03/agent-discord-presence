@@ -5,18 +5,20 @@
  * update: the daemon loads its code at spawn time, so a running daemon keeps the
  * old build until restarted (config changes hot-reload, but code doesn't).
  */
-import { isProcessAlive, readLock, spawnDaemon, stopDaemon } from '../core/daemon-state';
+import { DaemonState, isProcessAlive, spawnDaemon } from '../core/daemon-state';
+import { presenceDir } from '../core/paths';
 import { ui } from '../ui';
 
 export async function restart(_args: string[] = []): Promise<void> {
-  const old = await stopDaemon();
+  const daemon = new DaemonState(presenceDir());
+  const old = await daemon.stop();
   if (old) console.log(ui.dim(`  stopped daemon (pid ${old})`));
 
   spawnDaemon();
 
   // Give the fresh daemon a moment to acquire the lock, then report its pid.
   await new Promise((r) => setTimeout(r, 1000));
-  const lock = readLock();
+  const lock = daemon.readLock();
   if (lock && isProcessAlive(lock.pid)) {
     console.log(`${ui.check} ${ui.bold('daemon restarted')} ${ui.dim(`(pid ${lock.pid})`)}`);
   } else {

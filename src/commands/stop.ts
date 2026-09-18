@@ -5,11 +5,12 @@
  * data intact. Note: while you keep using Claude Code, the next hook event will
  * lazily respawn the daemon — to keep presence off for good, run `vdp uninstall`.
  */
-import { stopDaemon } from '../core/daemon-state';
+import { DaemonState } from '../core/daemon-state';
+import { presenceDir } from '../core/paths';
 import { ui } from '../ui';
 
 export async function stop(_args: string[] = []): Promise<void> {
-  const pid = await stopDaemon();
+  const pid = await new DaemonState(presenceDir()).stop();
   if (pid) {
     console.log(`${ui.check} ${ui.bold('daemon stopped')} ${ui.dim(`(pid ${pid})`)}`);
   } else {

@@ -22,7 +22,7 @@
  */
 import { readFileSync } from 'node:fs';
 import { basename } from 'node:path';
-import { isProcessAlive, readLock, spawnDaemon } from '../core/daemon-state';
+import { DaemonState, isProcessAlive, spawnDaemon } from '../core/daemon-state';
 import { presenceDir } from '../core/paths';
 import { SessionStore } from '../core/session-store';
 import type { ActivityState, SessionMarker } from '../types';
@@ -191,8 +191,8 @@ export function translate(
  * we still spawn — the daemon's own acquireLock takes the stale lock over
  * atomically, and if two hooks race here only one daemon wins the lock.
  */
-function ensureDaemon(): void {
-  const lock = readLock();
+function ensureDaemon(root: string): void {
+  const lock = new DaemonState(root).readLock();
   if (lock && isProcessAlive(lock.pid)) return; // a live daemon already owns it
   spawnDaemon(); // no lock, or a stale one — the daemon's acquireLock settles races
 }
@@ -200,23 +200,25 @@ function ensureDaemon(): void {
 export async function runHook(args: string[] = []): Promise<void> {
   try {
     const event = args[0] ?? 'unknown';
-    const result = translate(event, parsePayload(readStdin()), Date.now(), {
+    const now = Date.now();
+    const result = translate(event, parsePayload(readStdin()), now, {
       sessionId: process.env.CLAUDE_CODE_SESSION_ID,
       cwd: process.cwd(),
     });
     if (!result) return;
 
-    const store = new SessionStore(presenceDir());
+    const root = presenceDir();
+    const store = new SessionStore(root);
     if (result.kind === 'end') {
       store.end(result.id);
       return;
     }
-    store.record(result.id, result.patch, Date.now());
+    store.record(result.id, result.patch, now);
 
     // Any non-end event means the session is active, so make sure a daemon is
     // up — this self-heals after idle, a mid-session install, or a daemon crash.
     // (session-end returned above, so we never resurrect a daemon for a dying one.)
-    ensureDaemon();
+    ensureDaemon(root);
   } catch {
     // A broken presence tool must never break Claude Code.
   }

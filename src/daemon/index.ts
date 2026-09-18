@@ -11,12 +11,7 @@
  * to; health is surfaced through the status file (see core/daemon-state) which
  * `vdp status` reads.
  */
-import {
-  acquireLock,
-  clearDaemonStatus,
-  releaseLock,
-  writeDaemonStatus,
-} from '../core/daemon-state';
+import { DaemonState } from '../core/daemon-state';
 import { presenceDir } from '../core/paths';
 import { SessionStore } from '../core/session-store';
 import { UserConfigFile } from '../core/user-config';
@@ -30,12 +25,13 @@ const TICK_MS = 15 * 1000;
 const sleep = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));
 
 export async function startDaemon(_args: string[] = []): Promise<void> {
-  if (!acquireLock(Date.now())) return; // another daemon already owns the lock
+  const root = presenceDir();
+  const daemon = new DaemonState(root);
+  if (!daemon.acquireLock(Date.now())) return; // another daemon already owns the lock
 
   // The Discord app id is fixed for the connection's lifetime (changing it needs
   // a reconnect), so resolve it once. The theme, by contrast, is re-read every
   // tick so `vdp config` edits apply to the live card without a restart.
-  const root = presenceDir();
   const userConfig = new UserConfigFile(root);
   const discord = new DiscordPresence(userConfig.load().clientId);
   const tick = createReconcileTick({
@@ -43,7 +39,7 @@ export async function startDaemon(_args: string[] = []): Promise<void> {
     loadConfig: () => userConfig.load(),
     enrich: (state) => readTranscriptMeta(state.transcriptPath),
     sink: discord,
-    writeStatus: writeDaemonStatus,
+    writeStatus: (status) => daemon.writeStatus(status),
     pid: process.pid,
   });
 
@@ -52,13 +48,13 @@ export async function startDaemon(_args: string[] = []): Promise<void> {
     running = false;
     await discord.clearActivity();
     await discord.destroy();
-    clearDaemonStatus();
-    releaseLock();
+    daemon.clearStatus();
+    daemon.releaseLock();
   };
 
   process.once('SIGINT', () => void shutdown().then(() => process.exit(0)));
   process.once('SIGTERM', () => void shutdown().then(() => process.exit(0)));
-  process.on('exit', () => releaseLock()); // last-ditch synchronous cleanup
+  process.on('exit', () => daemon.releaseLock()); // last-ditch synchronous cleanup
 
   // Backstop: the discord-rpc IPC transport can let a socket 'error' (rejected
   // handshake, ECONNRESET) go unhandled during the connect window before our
