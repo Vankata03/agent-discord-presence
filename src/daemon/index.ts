@@ -1,20 +1,15 @@
 /**
- * Background daemon.
+ * Background daemon: lifecycle only.
  *
- * Singleton (guarded by the lockfile). Owns the Discord connection. On a fixed
- * tick it:
- *   - reads session markers, drops ones whose heartbeat is stale (crash-safe),
- *   - aggregates the live sessions into one state,
- *   - renders the active theme into a presence payload,
- *   - pushes it to Discord (the Discord layer reconnects transparently),
- *   - clears presence and self-exits once no sessions remain for a grace period.
+ * Singleton (guarded by the lockfile). Owns the Discord connection, installs
+ * the signal and crash handlers, and loops `tick → sleep` until the reconcile
+ * tick (see ./reconcile) says the idle grace has elapsed. Every decision about
+ * what to show lives in the tick; this file only wires the production
+ * dependencies together.
  *
  * It's spawned detached by the SessionStart hook, so there's no console to talk
  * to; health is surfaced through the status file (see core/daemon-state) which
  * `vdp status` reads.
- *
- * Facts the hook can't cheaply know (model, branch, tokens) are enriched here
- * from the current session's transcript before rendering.
  */
 import {
   acquireLock,
@@ -26,13 +21,11 @@ import { configPath, presenceDir } from '../core/paths';
 import { readUserConfig, resolveClientId, resolveTheme } from '../core/config';
 import { SessionStore } from '../core/session-store';
 import { readTranscriptMeta } from '../provider/transcript';
-import { renderPresence } from '../core/presence';
 import { DiscordPresence } from './discord';
+import { createReconcileTick } from './reconcile';
 
 /** How often we reconcile markers -> Discord. */
 const TICK_MS = 15 * 1000;
-/** How long with zero live sessions before the daemon clears presence and exits. */
-const IDLE_GRACE_MS = 60 * 1000;
 
 const sleep = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));
 
@@ -41,9 +34,16 @@ export async function startDaemon(_args: string[] = []): Promise<void> {
 
   // The Discord app id is fixed for the connection's lifetime (changing it needs
   // a reconnect), so resolve it once. The theme, by contrast, is re-read every
-  // tick below so `vdp config` edits apply to the live card without a restart.
+  // tick so `vdp config` edits apply to the live card without a restart.
   const discord = new DiscordPresence(resolveClientId(readUserConfig(configPath())));
-  const store = new SessionStore(presenceDir());
+  const tick = createReconcileTick({
+    store: new SessionStore(presenceDir()),
+    loadConfig: () => ({ theme: resolveTheme(readUserConfig(configPath())) }),
+    enrich: (state) => readTranscriptMeta(state.transcriptPath),
+    sink: discord,
+    writeStatus: writeDaemonStatus,
+    pid: process.pid,
+  });
 
   let running = true;
   const shutdown = async (): Promise<void> => {
@@ -80,39 +80,8 @@ export async function startDaemon(_args: string[] = []): Promise<void> {
     // In-flight RPC rejections are already handled by the Discord layer.
   });
 
-  let idleSince: number | null = null;
   while (running) {
-    const now = Date.now();
-    const state = store.snapshot(now);
-
-    if (state) {
-      idleSince = null;
-      // Fill model/branch/tokens from the transcript (hook-provided values win).
-      const meta = readTranscriptMeta(state.transcriptPath);
-      state.model ??= meta.model;
-      state.branch ??= meta.branch;
-      state.tokens ??= meta.tokens;
-      const theme = resolveTheme(readUserConfig(configPath()));
-      await discord.setActivity(renderPresence(theme, state, now));
-      writeDaemonStatus({
-        pid: process.pid,
-        connected: discord.isConnected,
-        sessionCount: state.sessionCount,
-        activity: state.activity,
-        updatedAt: now,
-      });
-    } else {
-      if (idleSince === null) idleSince = now;
-      await discord.clearActivity();
-      writeDaemonStatus({
-        pid: process.pid,
-        connected: discord.isConnected,
-        sessionCount: 0,
-        updatedAt: now,
-      });
-      if (now - idleSince >= IDLE_GRACE_MS) break;
-    }
-
+    if ((await tick(Date.now())) === 'idle-exit') break;
     await sleep(TICK_MS);
   }
 
