@@ -189,3 +189,48 @@ test('aggregate: null when every marker is stale', () => {
   const stale: SessionMarker = { id: 'a', startedAt: NOW, heartbeat: NOW - 21 * MIN };
   assert.equal(aggregate([stale], NOW, 20 * MIN), null);
 });
+
+// Review follow-ups (PR #8): ids reach the filesystem, markers come from
+// disk, and the two thresholds are independent options.
+test('record and end reject an id that could escape the sessions directory', () => {
+  const store = new SessionStore(root);
+  const backslash = String.fromCharCode(92);
+  const nul = String.fromCharCode(0);
+  for (const id of ['../config', 'a/b', `a${backslash}b`, `a${nul}b`, '.', '..', '']) {
+    assert.throws(() => store.record(id, {}, NOW), /session id/, JSON.stringify(id));
+    assert.throws(() => store.end(id), /session id/, JSON.stringify(id));
+  }
+  assert.ok(!existsSync(join(root, 'config.json')));
+  assert.ok(!existsSync(join(root, 'sessions', 'a')));
+});
+
+test('a marker whose id does not match its filename is ignored', () => {
+  const store = new SessionStore(root);
+  store.record('real', {}, NOW);
+  mkdirSync(join(root, 'sessions'), { recursive: true });
+  writeFileSync(
+    markerFile('imposter'),
+    JSON.stringify({ id: 'other', startedAt: NOW, heartbeat: NOW }),
+  );
+  assert.equal(store.snapshot(NOW)?.sessionCount, 1);
+});
+
+test('a marker without numeric startedAt and heartbeat is ignored', () => {
+  const store = new SessionStore(root);
+  mkdirSync(join(root, 'sessions'), { recursive: true });
+  writeFileSync(markerFile('no-heartbeat'), JSON.stringify({ id: 'no-heartbeat', startedAt: NOW }));
+  writeFileSync(markerFile('no-start'), JSON.stringify({ id: 'no-start', heartbeat: NOW }));
+  writeFileSync(
+    markerFile('strings'),
+    JSON.stringify({ id: 'strings', startedAt: 'x', heartbeat: 'y' }),
+  );
+  writeFileSync(markerFile('not-object'), '42');
+  assert.equal(store.snapshot(NOW), null);
+});
+
+test('a marker pruned in this snapshot is not reported as live', () => {
+  const store = new SessionStore(root, { staleAfterMs: 10 * MIN, pruneAfterMs: 2 * MIN });
+  store.record('gone', {}, NOW);
+  assert.equal(store.snapshot(NOW + 3 * MIN), null);
+  assert.ok(!existsSync(markerFile('gone')));
+});

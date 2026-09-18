@@ -12,7 +12,7 @@
  * process. The pid and the liveness probe are injectable so lock takeover is
  * testable without spawning processes.
  */
-import { mkdirSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, renameSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { spawn } from 'node:child_process';
 import { readJson, writeJsonAtomic } from './json-file';
@@ -91,15 +91,43 @@ export class DaemonState {
         if (existing && existing.pid !== this.pid && this.isAlive(existing.pid)) {
           return false; // another live daemon owns it
         }
-        // Stale (or ours) — clear it and retry the exclusive create.
-        try {
-          rmSync(this.lockPath);
-        } catch {
-          // someone else may have just cleared it; the retry settles the race
-        }
+        // Stale (or ours): take it over, then retry the exclusive create.
+        if (!this.clearStaleLock()) return false;
       }
     }
     return false;
+  }
+
+  /**
+   * Remove a lock we have just judged stale. Two daemons can reach this point
+   * together, and the first one's fresh lock must survive the second one's
+   * cleanup, so the stale file is moved aside atomically (rename) and checked:
+   * if it now belongs to a live daemon, that daemon replaced it in between, so
+   * we put it back and yield. Returns false when we must yield.
+   */
+  private clearStaleLock(): boolean {
+    const aside = `${this.lockPath}.${this.pid}.stale`;
+    try {
+      renameSync(this.lockPath, aside);
+    } catch {
+      return true; // someone else moved it first; the retry settles the race
+    }
+    const moved = readJson<LockInfo>(aside);
+    if (moved && moved.pid !== this.pid && this.isAlive(moved.pid)) {
+      // We moved a live daemon's fresh lock: restore it and back off.
+      try {
+        renameSync(aside, this.lockPath);
+      } catch {
+        // its owner re-creates the lock on its next acquire
+      }
+      return false;
+    }
+    try {
+      rmSync(aside);
+    } catch {
+      // best effort
+    }
+    return true;
   }
 
   /** Release the lock, but only if we still own it. */

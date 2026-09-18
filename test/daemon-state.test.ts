@@ -105,3 +105,31 @@ test('stop is a no-op when no daemon is running', async () => {
   state(OTHER, [OTHER]).acquireLock(NOW);
   assert.equal(await me.stop(), null, 'lock held by a dead pid');
 });
+
+// Review follow-up (PR #8): stale-lock takeover must not clear a lock another
+// daemon created between our read and our retry.
+test('takeover leaves no stale tombstone behind', () => {
+  state(OTHER, [OTHER]).acquireLock(NOW);
+  assert.equal(state(ME, [ME]).acquireLock(NOW + 1), true);
+  assert.deepEqual(readdirSync(root), ['daemon.lock']);
+});
+
+test('takeover yields when a live daemon replaced the stale lock first', () => {
+  const THIRD = 3000;
+  state(OTHER, [OTHER]).acquireLock(NOW); // OTHER then dies
+  // ME reads the stale lock; before ME moves it aside, THIRD takes it over.
+  let raced = false;
+  const me = new DaemonState(root, {
+    pid: ME,
+    isAlive: (p) => {
+      if (p === OTHER && !raced) {
+        raced = true;
+        state(THIRD, [THIRD]).acquireLock(NOW + 1);
+      }
+      return p === ME || p === THIRD;
+    },
+  });
+  assert.equal(me.acquireLock(NOW + 2), false);
+  assert.deepEqual(me.readLock(), { pid: THIRD, startedAt: NOW + 1 }, 'THIRD keeps its lock');
+  assert.deepEqual(readdirSync(root), ['daemon.lock']);
+});

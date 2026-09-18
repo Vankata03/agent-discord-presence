@@ -81,16 +81,25 @@ export class SessionStore {
     this.pruneAfterMs = options.pruneAfterMs ?? PRUNE_AFTER_MS;
   }
 
+  /**
+   * The id names the marker file, and it comes from the coding tool's hook
+   * payload, so it must not be able to leave the sessions directory.
+   */
   private markerPath(id: string): string {
+    if (!id || id === '.' || id === '..' || /[/\\\0]/.test(id)) {
+      throw new Error(`invalid session id: ${JSON.stringify(id)}`);
+    }
     return join(this.dir, `${id}.json`);
   }
 
   /**
    * Create or update a session's marker, always refreshing its heartbeat. A
-   * new marker starts at `now` unless the patch says otherwise.
+   * new marker starts at `now` unless the patch says otherwise. Throws on an
+   * unsafe id (the hook runner swallows it).
    */
   record(id: string, patch: Partial<SessionMarker>, now: number): void {
-    const existing = readJson<SessionMarker>(this.markerPath(id));
+    const path = this.markerPath(id);
+    const existing = readMarker(path, id);
     const merged: SessionMarker = {
       id,
       startedAt: existing?.startedAt ?? now,
@@ -98,13 +107,14 @@ export class SessionStore {
       ...patch,
       heartbeat: now,
     };
-    writeJsonAtomic(this.markerPath(id), merged);
+    writeJsonAtomic(path, merged);
   }
 
   /** Remove a session's marker. Idempotent: a marker already gone is fine. */
   end(id: string): void {
+    const path = this.markerPath(id);
     try {
-      rmSync(this.markerPath(id));
+      rmSync(path);
     } catch {
       // already gone — fine
     }
@@ -113,17 +123,21 @@ export class SessionStore {
   /**
    * The aggregated state of the live sessions at `now`, or null when none is
    * live. Also prunes abandoned markers, so the daemon never has to know the
-   * prune threshold.
+   * prune threshold; a marker pruned here is never reported as live.
    */
   snapshot(now: number): AggregatedState | null {
-    const markers = this.readAll();
-    for (const m of markers) {
+    const kept: SessionMarker[] = [];
+    for (const m of this.readAll()) {
       if (now - m.heartbeat > this.pruneAfterMs) this.end(m.id);
+      else kept.push(m);
     }
-    return aggregate(markers, now, this.staleAfterMs);
+    return aggregate(kept, now, this.staleAfterMs);
   }
 
-  /** Every readable marker on disk; corrupt or half-written ones are skipped. */
+  /**
+   * Every valid marker on disk. Corrupt, half-written or malformed files and
+   * files whose marker id disagrees with their name are skipped, never served.
+   */
   private readAll(): SessionMarker[] {
     let files: string[];
     try {
@@ -134,9 +148,19 @@ export class SessionStore {
     const out: SessionMarker[] = [];
     for (const f of files) {
       if (!f.endsWith('.json')) continue;
-      const m = readJson<SessionMarker>(this.markerPath(f.slice(0, -5)));
+      const m = readMarker(join(this.dir, f), f.slice(0, -5));
       if (m) out.push(m);
     }
     return out;
   }
+}
+
+/** Parse one marker file, or null unless it is a marker for `id`. */
+function readMarker(path: string, id: string): SessionMarker | null {
+  const value = readJson<unknown>(path);
+  if (typeof value !== 'object' || value === null) return null;
+  const m = value as Partial<SessionMarker>;
+  if (m.id !== id) return null;
+  if (!Number.isFinite(m.startedAt) || !Number.isFinite(m.heartbeat)) return null;
+  return m as SessionMarker;
 }
