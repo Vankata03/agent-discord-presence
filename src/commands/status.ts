@@ -8,8 +8,8 @@
  *   - the Discord connection state (from the daemon's status file),
  *   - how many Claude Code sessions are currently live.
  */
-import { configPath, presenceDir } from '../core/paths';
-import { readUserConfig, resolveClientId } from '../core/config';
+import { presenceDir } from '../core/paths';
+import { UserConfigFile } from '../core/user-config';
 import { HOOK_EVENTS, isOurEntry, readSettings } from '../core/settings';
 import {
   DAEMON_STATUS_STALE_MS,
@@ -29,7 +29,7 @@ export async function status(_args: string[] = []): Promise<void> {
   const hooksOk = installed.length === HOOK_EVENTS.length;
 
   // Discord application id configured?
-  const clientId = resolveClientId(readUserConfig(configPath()));
+  const clientId = new UserConfigFile(presenceDir()).load().clientId;
   const clientIdOk = clientId.length > 0;
 
   // Daemon running?

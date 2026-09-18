@@ -14,8 +14,8 @@
  * `config` command) so it never weighs on the hook or daemon paths.
  */
 import { Separator, confirm, input, select } from '@inquirer/prompts';
-import { configPath } from '../core/paths';
-import { DEFAULT_CONFIG, readUserConfig, resolveTheme, saveUserConfig } from '../core/config';
+import { presenceDir } from '../core/paths';
+import { DEFAULT_CONFIG, UserConfigFile, resolveTheme } from '../core/user-config';
 import { renderPresence } from '../core/presence';
 import { THEMES, THEME_MANIFEST } from '../themes/index';
 import { isProcessAlive, readLock } from '../core/daemon-state';
@@ -203,7 +203,8 @@ function applyNote(): string {
 }
 
 export async function config(args: string[] = []): Promise<void> {
-  const current = readUserConfig(configPath());
+  const userConfig = new UserConfigFile(presenceDir());
+  const current = userConfig.load().config;
 
   if (args.includes('--show')) {
     console.log(`${ui.dim('theme:')} ${ui.accent(current.theme)}\n`);
@@ -212,7 +213,7 @@ export async function config(args: string[] = []): Promise<void> {
   }
 
   if (args.includes('--reset')) {
-    saveUserConfig(DEFAULT_CONFIG);
+    userConfig.save(DEFAULT_CONFIG);
     console.log(`${ui.check} reset to the default ${ui.accent('"minimal"')} theme.`);
     console.log(`  ${ui.dim(applyNote())}`);
     return;
@@ -280,8 +281,8 @@ export async function config(args: string[] = []): Promise<void> {
       }
     }
 
-    saveUserConfig(next);
-    console.log(`\n${ui.check} ${ui.bold('Saved')} ${ui.dim(`to ${configPath()}`)}`);
+    userConfig.save(next);
+    console.log(`\n${ui.check} ${ui.bold('Saved')} ${ui.dim(`to ${userConfig.path}`)}`);
     console.log(`  ${ui.dim(applyNote())}`);
   } catch (err) {
     // @inquirer throws ExitPromptError on Ctrl+C — treat as a clean cancel.

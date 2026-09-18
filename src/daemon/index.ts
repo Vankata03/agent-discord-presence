@@ -17,9 +17,9 @@ import {
   releaseLock,
   writeDaemonStatus,
 } from '../core/daemon-state';
-import { configPath, presenceDir } from '../core/paths';
-import { readUserConfig, resolveClientId, resolveTheme } from '../core/config';
+import { presenceDir } from '../core/paths';
 import { SessionStore } from '../core/session-store';
+import { UserConfigFile } from '../core/user-config';
 import { readTranscriptMeta } from '../provider/transcript';
 import { DiscordPresence } from './discord';
 import { createReconcileTick } from './reconcile';
@@ -35,10 +35,12 @@ export async function startDaemon(_args: string[] = []): Promise<void> {
   // The Discord app id is fixed for the connection's lifetime (changing it needs
   // a reconnect), so resolve it once. The theme, by contrast, is re-read every
   // tick so `vdp config` edits apply to the live card without a restart.
-  const discord = new DiscordPresence(resolveClientId(readUserConfig(configPath())));
+  const root = presenceDir();
+  const userConfig = new UserConfigFile(root);
+  const discord = new DiscordPresence(userConfig.load().clientId);
   const tick = createReconcileTick({
-    store: new SessionStore(presenceDir()),
-    loadConfig: () => ({ theme: resolveTheme(readUserConfig(configPath())) }),
+    store: new SessionStore(root),
+    loadConfig: () => userConfig.load(),
     enrich: (state) => readTranscriptMeta(state.transcriptPath),
     sink: discord,
     writeStatus: writeDaemonStatus,
