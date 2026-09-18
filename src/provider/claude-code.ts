@@ -19,7 +19,8 @@
 import { readFileSync } from 'node:fs';
 import { basename } from 'node:path';
 import { isProcessAlive, readLock, spawnDaemon } from '../core/daemon-state';
-import { removeSessionMarker, updateSessionMarker } from '../core/state';
+import { presenceDir } from '../core/paths';
+import { SessionStore } from '../core/session-store';
 import type { ActivityState, SessionMarker } from '../types';
 
 interface HookPayload {
@@ -135,8 +136,9 @@ export async function runHook(args: string[] = []): Promise<void> {
     const id = payload.session_id ?? process.env.CLAUDE_CODE_SESSION_ID;
     if (!id) return; // can't attribute activity without a session id
 
+    const store = new SessionStore(presenceDir());
     if (event === 'session-end') {
-      removeSessionMarker(id);
+      store.end(id);
       return;
     }
 
@@ -157,7 +159,7 @@ export async function runHook(args: string[] = []): Promise<void> {
     if (event === 'session-start' && payload.source !== 'compact') {
       patch.startedAt = now;
     }
-    updateSessionMarker(id, patch, now);
+    store.record(id, patch, now);
 
     // Any non-end event means the session is active, so make sure a daemon is
     // up — this self-heals after idle, a mid-session install, or a daemon crash.

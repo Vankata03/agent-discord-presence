@@ -22,9 +22,9 @@ import {
   releaseLock,
   writeDaemonStatus,
 } from '../core/daemon-state';
-import { configPath } from '../core/paths';
+import { configPath, presenceDir } from '../core/paths';
 import { readUserConfig, resolveClientId, resolveTheme } from '../core/config';
-import { PRUNE_AFTER_MS, aggregate, readMarkers, removeSessionMarker } from '../core/state';
+import { SessionStore } from '../core/session-store';
 import { readTranscriptMeta } from '../provider/transcript';
 import { renderPresence } from '../core/presence';
 import { DiscordPresence } from './discord';
@@ -43,6 +43,7 @@ export async function startDaemon(_args: string[] = []): Promise<void> {
   // a reconnect), so resolve it once. The theme, by contrast, is re-read every
   // tick below so `vdp config` edits apply to the live card without a restart.
   const discord = new DiscordPresence(resolveClientId(readUserConfig(configPath())));
+  const store = new SessionStore(presenceDir());
 
   let running = true;
   const shutdown = async (): Promise<void> => {
@@ -82,14 +83,7 @@ export async function startDaemon(_args: string[] = []): Promise<void> {
   let idleSince: number | null = null;
   while (running) {
     const now = Date.now();
-    const markers = readMarkers();
-    const state = aggregate(markers, now);
-
-    // Delete abandoned markers (a session that never fired SessionEnd) so they
-    // don't pile up on disk over time.
-    for (const m of markers) {
-      if (now - m.heartbeat > PRUNE_AFTER_MS) removeSessionMarker(m.id);
-    }
+    const state = store.snapshot(now);
 
     if (state) {
       idleSince = null;

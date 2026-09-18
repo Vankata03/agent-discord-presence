@@ -8,7 +8,7 @@
  *   - the Discord connection state (from the daemon's status file),
  *   - how many Claude Code sessions are currently live.
  */
-import { configPath } from '../core/paths';
+import { configPath, presenceDir } from '../core/paths';
 import { readUserConfig, resolveClientId } from '../core/config';
 import { HOOK_EVENTS, isOurEntry, readSettings } from '../core/settings';
 import {
@@ -17,7 +17,7 @@ import {
   readDaemonStatus,
   readLock,
 } from '../core/daemon-state';
-import { aggregate, readMarkers } from '../core/state';
+import { SessionStore } from '../core/session-store';
 import { ui } from '../ui';
 
 const mark = (b: boolean): string => (b ? ui.check : ui.cross);
@@ -43,7 +43,7 @@ export async function status(_args: string[] = []): Promise<void> {
   const discordConnected = dsFresh && ds.connected;
 
   // Live sessions (independent of the daemon — read straight from markers).
-  const live = aggregate(readMarkers(), now);
+  const live = new SessionStore(presenceDir()).snapshot(now);
   const sessionCount = live?.sessionCount ?? 0;
 
   console.log(`${ui.title('vibecoder-discord-presence')} ${ui.dim('— status')}\n`);
