@@ -11,7 +11,7 @@ import {
   type PresenceSink,
   type ReconcileDeps,
 } from '../src/daemon/reconcile';
-import type { AggregatedState, PresencePayload, Theme } from '../src/types';
+import type { AggregatedState, PresencePayload, SessionMarkerPatch, Theme } from '../src/types';
 
 const NOW = 1_700_000_000_000;
 const SEC = 1_000;
@@ -75,12 +75,12 @@ function deps(): ReconcileDeps {
   };
 }
 
+function record(id: string, patch: SessionMarkerPatch, now: number): void {
+  store.record({ provider: 'claude-code', sessionId: id }, patch, now, true);
+}
+
 test('a live session renders the theme and pushes the payload to the sink', async () => {
-  store.record(
-    's1',
-    { project: 'app', branch: 'main', state: 'editing', activity: 'Editing a.ts' },
-    NOW,
-  );
+  record('s1', { project: 'app', branch: 'main', state: 'editing', activity: 'Editing a.ts' }, NOW);
   const tick = createReconcileTick(deps());
 
   assert.equal(await tick(NOW), 'active');
@@ -98,7 +98,7 @@ test('a live session renders the theme and pushes the payload to the sink', asyn
 });
 
 test('provider-supplied facts win over enriched values', async () => {
-  store.record('s1', { project: 'app', model: 'Opus 4.8', activity: 'Thinking' }, NOW);
+  record('s1', { project: 'app', model: 'Opus 4.8', activity: 'Thinking' }, NOW);
   enrichment = { model: 'Sonnet 4.5', branch: 'feat/x', tokens: 1500 };
   const tick = createReconcileTick(deps());
 
@@ -108,18 +108,18 @@ test('provider-supplied facts win over enriched values', async () => {
 });
 
 test('enrichment fills model, branch and tokens the provider did not know', async () => {
-  store.record('s1', { project: 'app', activity: 'Thinking', transcriptPath: '/t.jsonl' }, NOW);
+  record('s1', { project: 'app', activity: 'Thinking', enrichmentRef: '/t.jsonl' }, NOW);
   enrichment = { model: 'Opus 4.8', branch: 'main', tokens: 2_000_000 };
   const tick = createReconcileTick(deps());
 
   await tick(NOW);
   assert.equal(sink.payloads[0]?.state, 'Thinking · Opus 4.8 · 2.0M');
   assert.equal(sink.payloads[0]?.details, 'Working on app (main)');
-  assert.equal(enrichedWith[0]?.transcriptPath, '/t.jsonl', 'enrichment sees the snapshot');
+  assert.equal(enrichedWith[0]?.enrichmentRef, '/t.jsonl', 'enrichment sees the snapshot');
 });
 
 test('config is re-read every tick, so a saved theme change reaches the next payload', async () => {
-  store.record('s1', { project: 'app', activity: 'Thinking' }, NOW);
+  record('s1', { project: 'app', activity: 'Thinking' }, NOW);
   const tick = createReconcileTick(deps());
 
   await tick(NOW);
@@ -131,8 +131,8 @@ test('config is re-read every tick, so a saved theme change reaches the next pay
 });
 
 test('daemon status is written every tick from the sink and the snapshot', async () => {
-  store.record('s1', { activity: 'Editing a.ts' }, NOW);
-  store.record('s2', { activity: 'Idle' }, NOW - MIN);
+  record('s1', { activity: 'Editing a.ts' }, NOW);
+  record('s2', { activity: 'Idle' }, NOW - MIN);
   sink.isConnected = false;
   const tick = createReconcileTick(deps());
 
@@ -158,9 +158,9 @@ test('the idle grace restarts when a session comes back', async () => {
   const tick = createReconcileTick(deps(), { idleGraceMs: 60 * SEC });
 
   assert.equal(await tick(NOW), 'idle-continue');
-  store.record('s1', { activity: 'Thinking' }, NOW + 30 * SEC);
+  record('s1', { activity: 'Thinking' }, NOW + 30 * SEC);
   assert.equal(await tick(NOW + 30 * SEC), 'active');
-  store.end('s1');
+  store.end({ provider: 'claude-code', sessionId: 's1' });
   assert.equal(await tick(NOW + 70 * SEC), 'idle-continue', 'grace counts from the new idle');
   assert.equal(await tick(NOW + 130 * SEC), 'idle-exit');
 });
@@ -173,7 +173,7 @@ test('the default idle grace is 60 seconds', async () => {
 });
 
 test('a session that went stale is treated as idle', async () => {
-  store.record('s1', { activity: 'Thinking' }, NOW);
+  record('s1', { activity: 'Thinking' }, NOW);
   const tick = createReconcileTick(deps());
 
   assert.equal(await tick(NOW), 'active');

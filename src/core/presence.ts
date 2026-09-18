@@ -7,6 +7,7 @@
  * (e.g. `status-{state}` -> `status-editing`), and maps everything onto
  * Discord's fixed slots. Pure and deterministic — `now` is passed in, not read.
  */
+import { PROVIDER_DISPLAY_NAMES } from '../types';
 import type { AggregatedState, PresencePayload, Theme } from '../types';
 
 type Values = Record<string, string>;
@@ -28,6 +29,7 @@ function formatTokens(n: number): string {
 
 function buildValues(state: AggregatedState, now: number): Values {
   return {
+    provider: PROVIDER_DISPLAY_NAMES[state.provider],
     project: state.project ?? '',
     branch: state.branch ?? '',
     model: state.model ?? '',

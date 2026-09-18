@@ -25,7 +25,7 @@ import { basename } from 'node:path';
 import { DaemonState, isProcessAlive, spawnDaemon } from '../core/daemon-state';
 import { presenceDir } from '../core/paths';
 import { SessionStore } from '../core/session-store';
-import type { ActivityState, SessionMarker } from '../types';
+import type { ActivityState, SessionMarkerPatch } from '../types';
 
 /** What Claude Code writes to the hook's stdin. Every field is optional. */
 export interface HookPayload {
@@ -135,14 +135,14 @@ export interface TranslateEnv {
  * - `update`: merge `patch` into the session's marker. The store sets the
  *   heartbeat to `now` on every update, so a provider never writes it. A patch
  *   carries the facts the provider knows at hook time (`cwd`, `project`,
- *   `transcriptPath`, `state`, `activity`, `file`); anything it cannot know
+ *   `enrichmentRef`, `state`, `activity`, `file`); anything it cannot know
  *   cheaply (model, branch, tokens) is left for enrichment. `startedAt` is set
  *   only when the session's elapsed timer must restart.
  * - `end`: remove the session's marker; idempotent.
  * - `null`: the event cannot be attributed to a session and is dropped.
  */
 export type Translation =
-  | { kind: 'update'; id: string; patch: Partial<SessionMarker> }
+  | { kind: 'update'; id: string; patch: SessionMarkerPatch; activityChanged: boolean }
   | { kind: 'end'; id: string }
   | null;
 
@@ -164,22 +164,25 @@ export function translate(
   if (event === 'session-end') return { kind: 'end', id };
 
   const cwd = p.cwd ?? env.cwd;
-  const a = activityFor(event, p);
-  const patch: Partial<SessionMarker> = {
+  const isCompaction = event === 'session-start' && p.source === 'compact';
+  const patch: SessionMarkerPatch = {
     cwd,
     project: basename(cwd),
-    transcriptPath: p.transcript_path,
-    state: a.state,
-    activity: a.activity,
-    file: a.file,
+    enrichmentRef: p.transcript_path,
   };
+  if (!isCompaction) {
+    const activity = activityFor(event, p);
+    patch.state = activity.state;
+    patch.activity = activity.activity;
+    patch.file = activity.file;
+  }
   // A genuine (re)start resets the elapsed timer so it counts from when you
   // opened Claude Code — but an auto-compaction is mid-session housekeeping
   // and must keep the original start time.
   if (event === 'session-start' && p.source !== 'compact') {
     patch.startedAt = now;
   }
-  return { kind: 'update', id, patch };
+  return { kind: 'update', id, patch, activityChanged: !isCompaction };
 }
 
 /**
@@ -209,11 +212,12 @@ export async function runHook(args: string[] = []): Promise<void> {
 
     const root = presenceDir();
     const store = new SessionStore(root);
+    const identity = { provider: 'claude-code', sessionId: result.id } as const;
     if (result.kind === 'end') {
-      store.end(result.id);
+      store.end(identity);
       return;
     }
-    store.record(result.id, result.patch, now);
+    store.record(identity, result.patch, now, result.activityChanged);
 
     // Any non-end event means the session is active, so make sure a daemon is
     // up — this self-heals after idle, a mid-session install, or a daemon crash.

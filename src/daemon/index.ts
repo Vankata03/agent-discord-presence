@@ -37,7 +37,7 @@ export async function startDaemon(_args: string[] = []): Promise<void> {
   const tick = createReconcileTick({
     store: new SessionStore(root),
     loadConfig: () => userConfig.load(),
-    enrich: (state) => readTranscriptMeta(state.transcriptPath),
+    enrich: (state) => readTranscriptMeta(state.enrichmentRef),
     sink: discord,
     writeStatus: (status) => daemon.writeStatus(status),
     pid: process.pid,

@@ -5,7 +5,7 @@
  * Every string is a template; available placeholders are filled from the
  * aggregated session state:
  *
- *   {project} {branch} {model} {activity} {file} {tokens} {cost}
+ *   {provider} {project} {branch} {model} {activity} {file} {tokens} {cost}
  *   {elapsed} {sessionCount} {state}
  *
  * Empty placeholders collapse gracefully (no "Coding " with a trailing blank).

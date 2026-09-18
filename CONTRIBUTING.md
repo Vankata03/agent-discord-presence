@@ -72,7 +72,7 @@ Themes live in [`src/themes/index.ts`](src/themes/index.ts).
    live session:
 
    ```
-   {project} {branch} {model} {activity} {file} {tokens} {cost}
+   {provider} {project} {branch} {model} {activity} {file} {tokens} {cost}
    {elapsed} {sessionCount} {state}
    ```
 

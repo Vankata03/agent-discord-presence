@@ -15,7 +15,7 @@ const BASE: HookPayload = {
 const COMMON = {
   cwd: '/work/my-app',
   project: 'my-app',
-  transcriptPath: '/t.jsonl',
+  enrichmentRef: '/t.jsonl',
 };
 
 function update(event: string, extra: Partial<HookPayload> = {}) {
@@ -26,6 +26,7 @@ test('session-start resets the elapsed timer and reports a starting session', ()
   assert.deepEqual(update('session-start', { source: 'startup' }), {
     kind: 'update',
     id: 'sess-1',
+    activityChanged: true,
     patch: {
       ...COMMON,
       state: 'idle',
@@ -45,8 +46,12 @@ test('a resumed or cleared session also restarts the timer', () => {
 
 test('an auto-compaction keeps the original start time', () => {
   const r = update('session-start', { source: 'compact' });
-  assert.equal(r?.kind, 'update');
-  assert.ok(r?.kind === 'update' && !('startedAt' in r.patch));
+  assert.deepEqual(r, {
+    kind: 'update',
+    id: 'sess-1',
+    activityChanged: false,
+    patch: COMMON,
+  });
 });
 
 test('user-prompt-submit means thinking; stop means idle; an unknown event means working', () => {
@@ -59,7 +64,12 @@ test('user-prompt-submit means thinking; stop means idle; an unknown event means
     const r = update(event);
     assert.deepEqual(
       r,
-      { kind: 'update', id: 'sess-1', patch: { ...COMMON, state, activity, file: undefined } },
+      {
+        kind: 'update',
+        id: 'sess-1',
+        activityChanged: true,
+        patch: { ...COMMON, state, activity, file: undefined },
+      },
       event,
     );
   }
@@ -90,7 +100,12 @@ test('pre-tool-use maps every tool to an activity state and sentence', () => {
     const r = update('pre-tool-use', { tool_name: tool, tool_input: input });
     assert.deepEqual(
       r,
-      { kind: 'update', id: 'sess-1', patch: { ...COMMON, state, activity, file } },
+      {
+        kind: 'update',
+        id: 'sess-1',
+        activityChanged: true,
+        patch: { ...COMMON, state, activity, file },
+      },
       `${tool}`,
     );
   }
@@ -146,10 +161,11 @@ test('a malformed payload is treated as empty: cwd comes from the environment', 
   assert.deepEqual(r, {
     kind: 'update',
     id: 's',
+    activityChanged: true,
     patch: {
       cwd: '/srv/proj',
       project: 'proj',
-      transcriptPath: undefined,
+      enrichmentRef: undefined,
       state: 'thinking',
       activity: 'Thinking',
       file: undefined,

@@ -27,6 +27,8 @@ const APP_NAME = 'ClaudeCode'; // the registered Discord application name (the b
 /** Sample state used to render the preview so users see realistic text. */
 function sampleState(now: number): AggregatedState {
   return {
+    provider: 'claude-code',
+    sessionId: 'preview',
     sessionCount: 1,
     startedAt: now - 83_000, // ~1m 23s ago
     project: 'my-app',

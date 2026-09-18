@@ -10,6 +10,8 @@ const NOW = 1_700_000_000_000;
 /** A fully-populated state (every placeholder resolves to something). */
 function richState(): AggregatedState {
   return {
+    provider: 'claude-code',
+    sessionId: 'session-1',
     sessionCount: 2,
     startedAt: NOW - 90 * 60_000, // 1h 30m ago
     project: 'my-app',
@@ -26,6 +28,8 @@ function richState(): AggregatedState {
 /** A sparse state: only the always-present fields, everything optional empty. */
 function sparseState(): AggregatedState {
   return {
+    provider: 'claude-code',
+    sessionId: 'session-1',
     sessionCount: 1,
     startedAt: NOW - 5_000,
   };
@@ -131,4 +135,39 @@ test('terminal theme is privacy-safe: never leaks project, branch, or file', () 
 test('renderPresence resolves status-{state} badge to a concrete key', () => {
   const p = renderPresence(THEMES.terminal!, { ...richState(), state: 'thinking' }, NOW);
   assert.equal(p.smallImageKey, 'status-thinking');
+});
+
+test('custom themes render canonical provider display names', () => {
+  const custom = {
+    details: '{provider}',
+    state: '',
+    largeImage: { key: '', text: '' },
+    smallImage: { key: '', text: '' },
+    timer: false,
+    buttons: [],
+  };
+  const displayNames = {
+    'claude-code': 'Claude Code',
+    codex: 'Codex',
+    'gemini-cli': 'Gemini CLI',
+    opencode: 'OpenCode',
+    'grok-build': 'Grok Build',
+  } as const;
+
+  for (const [provider, displayName] of Object.entries(displayNames)) {
+    const payload = renderPresence(
+      custom,
+      { ...richState(), provider: provider as AggregatedState['provider'] },
+      NOW,
+    );
+    assert.equal(payload.details, displayName);
+  }
+});
+
+test('built-in theme output does not change with provider identity', () => {
+  for (const [name, theme] of Object.entries(THEMES)) {
+    const baseline = renderPresence(theme, richState(), NOW);
+    const fromCodex = renderPresence(theme, { ...richState(), provider: 'codex' }, NOW);
+    assert.deepEqual(fromCodex, baseline, name);
+  }
 });

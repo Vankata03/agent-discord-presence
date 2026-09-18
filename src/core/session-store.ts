@@ -1,10 +1,11 @@
 /**
  * Session store: the contract between hook providers and the daemon.
  *
- * Each hook process writes ONLY its own per-session marker (sessions/<id>.json
- * under the store's root), so concurrent hook processes never race on a shared
- * file. The daemon is the single reader. Writes are synchronous (hooks must be
- * fast) and atomic, so a reader never sees a half-written file.
+ * Each hook process writes ONLY its own per-session marker under
+ * sessions/<provider>/<session-id-digest>.json, so concurrent sessions never
+ * race on a shared file. The daemon is the single reader. Writes are
+ * synchronous (hooks must be fast) and atomic, so a reader never sees a
+ * half-written file.
  *
  * Liveness is inferred from the heartbeat alone: a marker whose heartbeat is
  * stale is excluded from the presence (the session may have crashed without a
@@ -14,10 +15,14 @@
  * The store is constructed with an explicit root so tests exercise the real
  * marker format in a temporary directory.
  */
+import { createHash } from 'node:crypto';
 import { readdirSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { readJson, writeJsonAtomic } from './json-file';
-import type { AggregatedState, SessionMarker } from '../types';
+import { PROVIDER_KEYS } from '../types';
+import type { AggregatedState, SessionIdentity, SessionMarker, SessionMarkerPatch } from '../types';
+
+const PROVIDERS = new Set<string>(PROVIDER_KEYS);
 
 /** A session is considered stale (excluded from the presence) past this. */
 export const STALE_AFTER_MS = 20 * 60 * 1000;
@@ -38,8 +43,9 @@ export interface SessionStoreOptions {
 
 /**
  * Merge the live markers (fresh heartbeat) into the single view the daemon
- * renders from. The current session is the one with the most recent heartbeat:
- * its facts drive the presence. Returns null when no session is live.
+ * renders from. Visible activity chooses the current session; heartbeat breaks
+ * activity ties and controls liveness. A stable identity tie-breaker keeps the
+ * result independent of filesystem enumeration order.
  *
  * Pure on purpose: this is the rule the multi-tool work extends.
  */
@@ -48,16 +54,28 @@ export function aggregate(
   now: number,
   staleAfterMs = STALE_AFTER_MS,
 ): AggregatedState | null {
-  const live = markers.filter((m) => now - m.heartbeat <= staleAfterMs);
+  const live = markers.filter(
+    (marker) =>
+      isValidIdentity(marker) &&
+      Number.isFinite(marker.startedAt) &&
+      Number.isFinite(marker.heartbeat) &&
+      Number.isFinite(marker.lastActivityAt) &&
+      now - marker.heartbeat <= staleAfterMs,
+  );
   if (live.length === 0) return null;
 
-  const current = live.reduce((a, b) => (b.heartbeat > a.heartbeat ? b : a));
-  const startedAt = live.reduce((min, m) => Math.min(min, m.startedAt), Infinity);
+  const current = [...live].sort(
+    (a, b) =>
+      b.lastActivityAt - a.lastActivityAt || b.heartbeat - a.heartbeat || compareIdentity(a, b),
+  )[0]!;
 
   return {
     sessionCount: live.length,
-    startedAt,
-    transcriptPath: current.transcriptPath,
+    provider: current.provider,
+    sessionId: current.sessionId,
+    startedAt: current.startedAt,
+    cwd: current.cwd,
+    enrichmentRef: current.enrichmentRef,
     project: current.project,
     branch: current.branch,
     model: current.model,
@@ -82,37 +100,43 @@ export class SessionStore {
   }
 
   /**
-   * The id names the marker file, and it comes from the coding tool's hook
-   * payload, so it must not be able to leave the sessions directory.
+   * Provider keys are allowlisted. Raw session ids are validated, then hashed
+   * so they never become filesystem names.
    */
-  private markerPath(id: string): string {
-    if (!id || id === '.' || id === '..' || /[/\\\0]/.test(id)) {
-      throw new Error(`invalid session id: ${JSON.stringify(id)}`);
-    }
-    return join(this.dir, `${id}.json`);
+  private markerPath(identity: SessionIdentity): string {
+    validateIdentity(identity);
+    return join(this.dir, identity.provider, markerFileName(identity.sessionId));
   }
 
   /**
    * Create or update a session's marker, always refreshing its heartbeat. A
-   * new marker starts at `now` unless the patch says otherwise. Throws on an
-   * unsafe id (the hook runner swallows it).
+   * new marker starts at `now` unless the patch says otherwise. Visible
+   * activity advances its selection clock; housekeeping only advances the
+   * heartbeat. Throws on an invalid identity (the hook runner swallows it).
    */
-  record(id: string, patch: Partial<SessionMarker>, now: number): void {
-    const path = this.markerPath(id);
-    const existing = readMarker(path, id);
+  record(
+    identity: SessionIdentity,
+    patch: SessionMarkerPatch,
+    now: number,
+    activityChanged: boolean,
+  ): void {
+    const path = this.markerPath(identity);
+    const existing = parseMarker(readJson<unknown>(path), identity);
     const merged: SessionMarker = {
-      id,
       startedAt: existing?.startedAt ?? now,
       ...existing,
       ...patch,
+      provider: identity.provider,
+      sessionId: identity.sessionId,
       heartbeat: now,
+      lastActivityAt: !existing || activityChanged ? now : existing.lastActivityAt,
     };
     writeJsonAtomic(path, merged);
   }
 
   /** Remove a session's marker. Idempotent: a marker already gone is fine. */
-  end(id: string): void {
-    const path = this.markerPath(id);
+  end(identity: SessionIdentity): void {
+    const path = this.markerPath(identity);
     try {
       rmSync(path);
     } catch {
@@ -128,39 +152,87 @@ export class SessionStore {
   snapshot(now: number): AggregatedState | null {
     const kept: SessionMarker[] = [];
     for (const m of this.readAll()) {
-      if (now - m.heartbeat > this.pruneAfterMs) this.end(m.id);
+      if (now - m.heartbeat > this.pruneAfterMs) this.end(m);
       else kept.push(m);
     }
     return aggregate(kept, now, this.staleAfterMs);
   }
 
   /**
-   * Every valid marker on disk. Corrupt, half-written or malformed files and
-   * files whose marker id disagrees with their name are skipped, never served.
+   * Every valid namespaced marker on disk. Legacy flat markers, malformed
+   * files, and files whose stored identity disagrees with their path are
+   * skipped, never served.
    */
   private readAll(): SessionMarker[] {
-    let files: string[];
-    try {
-      files = readdirSync(this.dir);
-    } catch {
-      return [];
-    }
     const out: SessionMarker[] = [];
-    for (const f of files) {
-      if (!f.endsWith('.json')) continue;
-      const m = readMarker(join(this.dir, f), f.slice(0, -5));
-      if (m) out.push(m);
+    for (const provider of PROVIDER_KEYS) {
+      let files: string[];
+      try {
+        files = readdirSync(join(this.dir, provider));
+      } catch {
+        continue;
+      }
+      for (const file of files) {
+        if (!/^[a-f0-9]{64}\.json$/.test(file)) continue;
+        const value = readJson<unknown>(join(this.dir, provider, file));
+        if (typeof value !== 'object' || value === null) continue;
+        const sessionId = (value as Partial<SessionMarker>).sessionId;
+        if (typeof sessionId !== 'string') continue;
+        const identity = { provider, sessionId };
+        try {
+          validateIdentity(identity);
+        } catch {
+          continue;
+        }
+        if (markerFileName(sessionId) !== file) continue;
+        const marker = parseMarker(value, identity);
+        if (marker) out.push(marker);
+      }
     }
     return out;
   }
 }
 
-/** Parse one marker file, or null unless it is a marker for `id`. */
-function readMarker(path: string, id: string): SessionMarker | null {
-  const value = readJson<unknown>(path);
+function validateIdentity(identity: SessionIdentity): void {
+  if (!PROVIDERS.has(identity.provider)) {
+    throw new Error(`invalid provider: ${JSON.stringify(identity.provider)}`);
+  }
+  const id = identity.sessionId;
+  if (!id || id === '.' || id === '..' || /[/\\\0]/.test(id)) {
+    throw new Error(`invalid session id: ${JSON.stringify(id)}`);
+  }
+}
+
+function isValidIdentity(identity: SessionIdentity): boolean {
+  try {
+    validateIdentity(identity);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function compareIdentity(a: SessionIdentity, b: SessionIdentity): number {
+  const aKey = `${a.provider}\0${a.sessionId}`;
+  const bKey = `${b.provider}\0${b.sessionId}`;
+  return aKey < bKey ? -1 : aKey > bKey ? 1 : 0;
+}
+
+function markerFileName(sessionId: string): string {
+  return `${createHash('sha256').update(sessionId).digest('hex')}.json`;
+}
+
+/** Parse one marker value, or null unless it belongs to `identity`. */
+function parseMarker(value: unknown, identity: SessionIdentity): SessionMarker | null {
   if (typeof value !== 'object' || value === null) return null;
   const m = value as Partial<SessionMarker>;
-  if (m.id !== id) return null;
-  if (!Number.isFinite(m.startedAt) || !Number.isFinite(m.heartbeat)) return null;
+  if (m.provider !== identity.provider || m.sessionId !== identity.sessionId) return null;
+  if (
+    !Number.isFinite(m.startedAt) ||
+    !Number.isFinite(m.heartbeat) ||
+    !Number.isFinite(m.lastActivityAt)
+  ) {
+    return null;
+  }
   return m as SessionMarker;
 }

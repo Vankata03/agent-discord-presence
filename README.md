@@ -50,15 +50,15 @@ Seven built-ins, from privacy-safe to maximum vibes.
   <img src="assets/profile.png" alt="Discord rich presence" width="320"/>
 </p>
 
-| Theme       | Vibe                                                  |
-| ----------- | ----------------------------------------------------- |
-| `minimal`   | Privacy-safe — nothing about your work (default)       |
-| `developer` | Project, branch, file, model                          |
-| `focus`     | Deep-work timer                                        |
-| `playful`   | Vibey and casual                                       |
-| `chaos`     | 🚀 Every stat, all the emojis, peak vibes              |
+| Theme       | Vibe                                                             |
+| ----------- | ---------------------------------------------------------------- |
+| `minimal`   | Privacy-safe — nothing about your work (default)                 |
+| `developer` | Project, branch, file, model                                     |
+| `focus`     | Deep-work timer                                                  |
+| `playful`   | Vibey and casual                                                 |
+| `chaos`     | 🚀 Every stat, all the emojis, peak vibes                        |
 | `terminal`  | `>` Retro hacker prompt — privacy-safe, never leaks your project |
-| `shipper`   | 🚢 Momentum & ship-it energy                           |
+| `shipper`   | 🚢 Momentum & ship-it energy                                     |
 
 ## Customize
 
@@ -68,6 +68,11 @@ vdp config
 
 Pick a theme or build your own — every line, image, and button — with a live
 preview as you go.
+
+Custom theme templates can use `{provider}`, `{project}`, `{branch}`, `{model}`,
+`{activity}`, `{file}`, `{tokens}`, `{cost}`, `{elapsed}`, `{sessionCount}`, and
+`{state}`. The optional `{provider}` placeholder uses the coding tool's display
+name; built-in themes do not reveal it.
 
 ## Commands
 

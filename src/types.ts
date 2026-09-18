@@ -55,6 +55,26 @@ export type ActivityState =
   | 'delegating'
   | 'waiting';
 
+/** Canonical provider keys and their opt-in theme display names. */
+export const PROVIDER_DISPLAY_NAMES = {
+  'claude-code': 'Claude Code',
+  codex: 'Codex',
+  'gemini-cli': 'Gemini CLI',
+  opencode: 'OpenCode',
+  'grok-build': 'Grok Build',
+} as const;
+
+export type ProviderKey = keyof typeof PROVIDER_DISPLAY_NAMES;
+export const PROVIDER_KEYS = Object.freeze(
+  Object.keys(PROVIDER_DISPLAY_NAMES) as ProviderKey[],
+) as readonly ProviderKey[];
+
+/** A provider's raw session id is unique only within that provider. */
+export interface SessionIdentity {
+  provider: ProviderKey;
+  sessionId: string;
+}
+
 /** The user's config file: pick a theme, optionally override slots. */
 export interface UserConfig {
   theme: ThemeName;
@@ -63,13 +83,13 @@ export interface UserConfig {
   clientId?: string;
 }
 
-/** One live Claude Code session, written by the hook provider. */
-export interface SessionMarker {
-  id: string;
+/** One live root session, written by its coding-tool provider. */
+export interface SessionMarker extends SessionIdentity {
   startedAt: number; // epoch ms
   heartbeat: number; // epoch ms
+  lastActivityAt: number; // epoch ms
   cwd?: string;
-  transcriptPath?: string; // side-channel the daemon reads for model/tokens/branch
+  enrichmentRef?: string; // provider-owned reference read by daemon enrichment
   project?: string;
   branch?: string;
   model?: string;
@@ -80,11 +100,17 @@ export interface SessionMarker {
   cost?: number;
 }
 
+/** Provider-owned facts accepted by the store; identity and clocks are store-owned. */
+export type SessionMarkerPatch = Partial<
+  Omit<SessionMarker, 'provider' | 'sessionId' | 'heartbeat' | 'lastActivityAt'>
+>;
+
 /** Live sessions merged into a single view the daemon renders. */
-export interface AggregatedState {
+export interface AggregatedState extends SessionIdentity {
   sessionCount: number;
-  startedAt: number; // earliest start across live sessions
-  transcriptPath?: string; // current session's transcript, for daemon enrichment
+  startedAt: number; // selected session's start
+  cwd?: string; // selected session's working directory
+  enrichmentRef?: string; // selected session's provider-owned enrichment reference
   project?: string;
   branch?: string;
   model?: string;
