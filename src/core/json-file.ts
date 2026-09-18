@@ -48,7 +48,11 @@ export interface WriteJsonOptions {
 }
 
 /** Write a JSON file atomically (temp file + rename), creating parent dirs. */
-export function writeJsonAtomic(path: string, value: unknown, options: WriteJsonOptions = {}): void {
+export function writeJsonAtomic(
+  path: string,
+  value: unknown,
+  options: WriteJsonOptions = {},
+): void {
   mkdirSync(dirname(path), { recursive: true });
   const body = options.pretty ? `${JSON.stringify(value, null, 2)}\n` : JSON.stringify(value);
   const tmp = `${path}.${process.pid}.tmp`;
