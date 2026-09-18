@@ -18,7 +18,7 @@ import { presenceDir } from '../core/paths';
 import { DEFAULT_CONFIG, UserConfigFile, resolveTheme } from '../core/user-config';
 import { renderPresence } from '../core/presence';
 import { THEMES, THEME_MANIFEST } from '../themes/index';
-import { isProcessAlive, readLock } from '../core/daemon-state';
+import { DaemonState, isProcessAlive } from '../core/daemon-state';
 import { ui } from '../ui';
 import type { AggregatedState, PresenceButton, StatusDisplay, Theme, UserConfig } from '../types';
 
@@ -194,8 +194,8 @@ async function editThemeMenu(start: Theme): Promise<Theme | null> {
   }
 }
 
-function applyNote(): string {
-  const lock = readLock();
+function applyNote(root: string): string {
+  const lock = new DaemonState(root).readLock();
   if (lock && isProcessAlive(lock.pid)) {
     return 'Your live card will update within ~15s.';
   }
@@ -203,7 +203,8 @@ function applyNote(): string {
 }
 
 export async function config(args: string[] = []): Promise<void> {
-  const userConfig = new UserConfigFile(presenceDir());
+  const root = presenceDir();
+  const userConfig = new UserConfigFile(root);
   const current = userConfig.load().config;
 
   if (args.includes('--show')) {
@@ -215,7 +216,7 @@ export async function config(args: string[] = []): Promise<void> {
   if (args.includes('--reset')) {
     userConfig.save(DEFAULT_CONFIG);
     console.log(`${ui.check} reset to the default ${ui.accent('"minimal"')} theme.`);
-    console.log(`  ${ui.dim(applyNote())}`);
+    console.log(`  ${ui.dim(applyNote(root))}`);
     return;
   }
 
@@ -283,7 +284,7 @@ export async function config(args: string[] = []): Promise<void> {
 
     userConfig.save(next);
     console.log(`\n${ui.check} ${ui.bold('Saved')} ${ui.dim(`to ${userConfig.path}`)}`);
-    console.log(`  ${ui.dim(applyNote())}`);
+    console.log(`  ${ui.dim(applyNote(root))}`);
   } catch (err) {
     // @inquirer throws ExitPromptError on Ctrl+C — treat as a clean cancel.
     if (err instanceof Error && err.name === 'ExitPromptError') {
