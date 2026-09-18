@@ -1,28 +1,34 @@
 /**
- * Claude Code event provider.
+ * Claude Code provider.
  *
  * Hook entries call `vdp hook <event>`. Each call is a short-lived process that
- * reads the hook payload from stdin, derives the current activity, updates this
- * session's marker (refreshing its heartbeat), then exits. On `session-start`
- * it lazily spawns the daemon if one isn't already running.
+ * reads the hook payload from stdin, translates it into a session-marker update
+ * (refreshing the session's heartbeat) and exits. Any non-end event lazily
+ * spawns the daemon if one isn't already running.
  *
- * Hard rule: this path must NEVER throw or hang — it runs inside Claude Code's
- * hook execution. Everything is wrapped; errors are swallowed and we still
- * succeed.
+ * The translation rules are the pure, exported `translate`; the hook runner
+ * around it is a thin adapter (stdin → translate → store → ensure daemon).
+ *
+ * Hard rule: the hook path must NEVER throw or hang — it runs inside Claude
+ * Code's hook execution. Everything is wrapped; errors are swallowed and we
+ * still succeed.
  *
  * This module is the only Claude-Code-specific part of the system. Other tools
- * would get their own provider that writes the same marker format.
+ * get their own provider that produces the same marker contract (see
+ * `Translation`).
  *
  * Hook payload shapes are documented from a live session — see claupit's
  * hooks-findings.md (session_id, cwd, transcript_path, tool_name, tool_input…).
  */
 import { readFileSync } from 'node:fs';
 import { basename } from 'node:path';
-import { isProcessAlive, readLock, spawnDaemon } from '../core/daemon-state';
-import { removeSessionMarker, updateSessionMarker } from '../core/state';
+import { DaemonState, isProcessAlive, spawnDaemon } from '../core/daemon-state';
+import { presenceDir } from '../core/paths';
+import { SessionStore } from '../core/session-store';
 import type { ActivityState, SessionMarker } from '../types';
 
-interface HookPayload {
+/** What Claude Code writes to the hook's stdin. Every field is optional. */
+export interface HookPayload {
   session_id?: string;
   cwd?: string;
   transcript_path?: string;
@@ -114,6 +120,69 @@ function activityFor(event: string, payload: HookPayload): Activity {
 }
 
 /**
+ * What the hook runner learned from the environment when the payload is
+ * silent: the session id Claude Code exports, and the process cwd.
+ */
+export interface TranslateEnv {
+  sessionId?: string;
+  cwd: string;
+}
+
+/**
+ * The marker contract a provider must satisfy. A provider turns one hook
+ * event into exactly one of:
+ *
+ * - `update`: merge `patch` into the session's marker. The store sets the
+ *   heartbeat to `now` on every update, so a provider never writes it. A patch
+ *   carries the facts the provider knows at hook time (`cwd`, `project`,
+ *   `transcriptPath`, `state`, `activity`, `file`); anything it cannot know
+ *   cheaply (model, branch, tokens) is left for enrichment. `startedAt` is set
+ *   only when the session's elapsed timer must restart.
+ * - `end`: remove the session's marker; idempotent.
+ * - `null`: the event cannot be attributed to a session and is dropped.
+ */
+export type Translation =
+  | { kind: 'update'; id: string; patch: Partial<SessionMarker> }
+  | { kind: 'end'; id: string }
+  | null;
+
+/**
+ * Translate one Claude Code hook event into a marker update. Pure: `now` and
+ * the environment are passed in, and a malformed (null) payload is treated as
+ * empty so the fallbacks decide.
+ */
+export function translate(
+  event: string,
+  payload: HookPayload | null,
+  now: number,
+  env: TranslateEnv,
+): Translation {
+  const p = payload ?? {};
+  const id = p.session_id ?? env.sessionId;
+  if (!id) return null; // can't attribute activity without a session id
+
+  if (event === 'session-end') return { kind: 'end', id };
+
+  const cwd = p.cwd ?? env.cwd;
+  const a = activityFor(event, p);
+  const patch: Partial<SessionMarker> = {
+    cwd,
+    project: basename(cwd),
+    transcriptPath: p.transcript_path,
+    state: a.state,
+    activity: a.activity,
+    file: a.file,
+  };
+  // A genuine (re)start resets the elapsed timer so it counts from when you
+  // opened Claude Code — but an auto-compaction is mid-session housekeeping
+  // and must keep the original start time.
+  if (event === 'session-start' && p.source !== 'compact') {
+    patch.startedAt = now;
+  }
+  return { kind: 'update', id, patch };
+}
+
+/**
  * Spawn the daemon detached unless a live one is already running. Best-effort,
  * never throws.
  *
@@ -122,8 +191,8 @@ function activityFor(event: string, payload: HookPayload): Activity {
  * we still spawn — the daemon's own acquireLock takes the stale lock over
  * atomically, and if two hooks race here only one daemon wins the lock.
  */
-function ensureDaemon(): void {
-  const lock = readLock();
+function ensureDaemon(root: string): void {
+  const lock = new DaemonState(root).readLock();
   if (lock && isProcessAlive(lock.pid)) return; // a live daemon already owns it
   spawnDaemon(); // no lock, or a stale one — the daemon's acquireLock settles races
 }
@@ -131,38 +200,25 @@ function ensureDaemon(): void {
 export async function runHook(args: string[] = []): Promise<void> {
   try {
     const event = args[0] ?? 'unknown';
-    const payload = parsePayload(readStdin()) ?? {};
-    const id = payload.session_id ?? process.env.CLAUDE_CODE_SESSION_ID;
-    if (!id) return; // can't attribute activity without a session id
+    const now = Date.now();
+    const result = translate(event, parsePayload(readStdin()), now, {
+      sessionId: process.env.CLAUDE_CODE_SESSION_ID,
+      cwd: process.cwd(),
+    });
+    if (!result) return;
 
-    if (event === 'session-end') {
-      removeSessionMarker(id);
+    const root = presenceDir();
+    const store = new SessionStore(root);
+    if (result.kind === 'end') {
+      store.end(result.id);
       return;
     }
-
-    const now = Date.now();
-    const cwd = payload.cwd ?? process.cwd();
-    const a = activityFor(event, payload);
-    const patch: Partial<SessionMarker> = {
-      cwd,
-      project: basename(cwd),
-      transcriptPath: payload.transcript_path,
-      state: a.state,
-      activity: a.activity,
-      file: a.file,
-    };
-    // A genuine (re)start resets the elapsed timer so it counts from when you
-    // opened Claude Code — but an auto-compaction is mid-session housekeeping
-    // and must keep the original start time.
-    if (event === 'session-start' && payload.source !== 'compact') {
-      patch.startedAt = now;
-    }
-    updateSessionMarker(id, patch, now);
+    store.record(result.id, result.patch, now);
 
     // Any non-end event means the session is active, so make sure a daemon is
     // up — this self-heals after idle, a mid-session install, or a daemon crash.
     // (session-end returned above, so we never resurrect a daemon for a dying one.)
-    ensureDaemon();
+    ensureDaemon(root);
   } catch {
     // A broken presence tool must never break Claude Code.
   }

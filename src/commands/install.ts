@@ -7,9 +7,9 @@
  * bundle, so they never pay npx resolution cost on every Claude Code event.
  */
 import { existsSync } from 'node:fs';
-import { mkdir, writeFile } from 'node:fs/promises';
-import { configPath, entryPath, presenceDir, sessionsDir } from '../core/paths';
-import { DEFAULT_CONFIG } from '../core/config';
+import { mkdir } from 'node:fs/promises';
+import { entryPath, presenceDir, sessionsDir } from '../core/paths';
+import { DEFAULT_CONFIG, UserConfigFile } from '../core/user-config';
 import {
   HOOK_EVENTS,
   backupSettings,
@@ -23,10 +23,8 @@ export async function install(_args: string[] = []): Promise<void> {
   await mkdir(sessionsDir(), { recursive: true });
 
   // Default config — only if the user doesn't already have one.
-  if (!existsSync(configPath())) {
-    await mkdir(presenceDir(), { recursive: true });
-    await writeFile(configPath(), `${JSON.stringify(DEFAULT_CONFIG, null, 2)}\n`);
-  }
+  const userConfig = new UserConfigFile(presenceDir());
+  if (!existsSync(userConfig.path)) userConfig.save(DEFAULT_CONFIG);
 
   const existing = await readSettings();
   const backupPath = await backupSettings(existing);
@@ -34,7 +32,7 @@ export async function install(_args: string[] = []): Promise<void> {
 
   console.log(`${ui.check} ${ui.bold('vibecoder-discord-presence installed')}`);
   console.log(`  ${ui.dim('hooks:')}  ${HOOK_EVENTS.map((e) => e.name).join(', ')}`);
-  console.log(`  ${ui.dim('config:')} ${ui.accent(configPath())}`);
+  console.log(`  ${ui.dim('config:')} ${ui.accent(userConfig.path)}`);
   if (backupPath) console.log(`  ${ui.dim('backup:')} ${ui.accent(backupPath)}`);
   console.log(
     `\n${ui.dim('Open Claude Code with Discord running and your presence will appear.')}`,

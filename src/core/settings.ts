@@ -6,9 +6,8 @@
  * name (`vdp.js`), so we can find and remove exactly our own entries without
  * touching anyone else's hooks.
  */
-import { mkdir, readFile, rename, writeFile } from 'node:fs/promises';
-import { dirname } from 'node:path';
-import { claudeDir, settingsPath } from './paths';
+import { readJsonIfExists, writeJsonAtomic } from './json-file';
+import { settingsPath } from './paths';
 
 /** Substring that identifies one of our hook commands. */
 export const HOOK_MARKER = 'vdp.js';
@@ -39,28 +38,19 @@ export const HOOK_EVENTS: ReadonlyArray<{ name: string; arg: string }> = [
   { name: 'SessionEnd', arg: 'session-end' },
 ];
 
-function stripBom(s: string): string {
-  return s.charCodeAt(0) === 0xfeff ? s.slice(1) : s;
-}
-
+/**
+ * A missing settings file is an empty one; a corrupt one is an error the
+ * caller must see (silently replacing a user's broken settings would lose
+ * their other hooks).
+ */
 export async function readSettings(): Promise<Settings> {
-  try {
-    const raw = stripBom(await readFile(settingsPath(), 'utf8'));
-    const parsed: unknown = JSON.parse(raw);
-    if (typeof parsed !== 'object' || parsed === null) return {};
-    return parsed as Settings;
-  } catch (err) {
-    if ((err as NodeJS.ErrnoException).code === 'ENOENT') return {};
-    throw err;
-  }
+  const parsed = readJsonIfExists<unknown>(settingsPath());
+  if (typeof parsed !== 'object' || parsed === null) return {};
+  return parsed as Settings;
 }
 
 export async function writeSettings(settings: Settings): Promise<void> {
-  const dest = settingsPath();
-  await mkdir(dirname(dest), { recursive: true });
-  const tmp = `${dest}.tmp`;
-  await writeFile(tmp, `${JSON.stringify(settings, null, 2)}\n`);
-  await rename(tmp, dest);
+  writeJsonAtomic(settingsPath(), settings, { pretty: true });
 }
 
 /** Back up non-empty settings before we touch them. Returns the backup path. */
@@ -68,8 +58,7 @@ export async function backupSettings(settings: Settings): Promise<string | null>
   if (Object.keys(settings).length === 0) return null;
   const ts = new Date().toISOString().replace(/[:.]/g, '-');
   const path = `${settingsPath()}.${ts}.bak`;
-  await mkdir(claudeDir(), { recursive: true });
-  await writeFile(path, `${JSON.stringify(settings, null, 2)}\n`);
+  writeJsonAtomic(path, settings, { pretty: true });
   return path;
 }
 

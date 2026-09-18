@@ -13,7 +13,7 @@
 import { rm } from 'node:fs/promises';
 import { presenceDir } from '../core/paths';
 import { readSettings, stripOurHooks, writeSettings } from '../core/settings';
-import { stopDaemon } from '../core/daemon-state';
+import { DaemonState } from '../core/daemon-state';
 import { ui } from '../ui';
 
 export async function uninstall(args: string[] = []): Promise<void> {
@@ -31,7 +31,7 @@ export async function uninstall(args: string[] = []): Promise<void> {
   );
 
   // Always stop the daemon — there are no hooks left to feed it.
-  const stopped = await stopDaemon();
+  const stopped = await new DaemonState(presenceDir()).stop();
   console.log(ui.dim(stopped ? `  stopped daemon (pid ${stopped})` : '  daemon not running'));
 
   if (!purge) {
