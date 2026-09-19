@@ -15,6 +15,7 @@
  * costs nothing.
  */
 import { readFileSync, statSync } from 'node:fs';
+import type { SessionIdentity } from '../types';
 
 export interface TranscriptMeta {
   model?: string;
@@ -23,12 +24,19 @@ export interface TranscriptMeta {
 }
 
 interface CacheEntry {
+  path: string;
   mtimeMs: number;
   size: number;
   meta: TranscriptMeta;
 }
 
 const cache = new Map<string, CacheEntry>();
+
+function cacheKey(path: string, identity?: SessionIdentity): string {
+  return identity
+    ? JSON.stringify([identity.provider, identity.sessionId])
+    : JSON.stringify([path]);
+}
 
 /** Turn a raw model id (`claude-opus-4-8`) into a friendly label (`Opus 4.8`). */
 function prettyModel(raw: string): string {
@@ -43,18 +51,24 @@ interface TranscriptLine {
   message?: { model?: string; usage?: { output_tokens?: number } };
 }
 
-function parse(path: string): TranscriptMeta {
+interface ParseResult {
+  meta: TranscriptMeta;
+  complete: boolean;
+}
+
+function parse(path: string): ParseResult {
   let raw: string;
   try {
     raw = readFileSync(path, 'utf8');
   } catch {
-    return {};
+    return { meta: {}, complete: false };
   }
 
   let model: string | undefined;
   let branch: string | undefined;
   let tokens = 0;
   let sawTokens = false;
+  let complete = true;
 
   for (const line of raw.split('\n')) {
     if (!line) continue;
@@ -62,6 +76,7 @@ function parse(path: string): TranscriptMeta {
     try {
       entry = JSON.parse(line) as TranscriptLine;
     } catch {
+      complete = false;
       continue; // skip a half-written trailing line
     }
 
@@ -84,14 +99,20 @@ function parse(path: string): TranscriptMeta {
   }
 
   return {
-    model: model ? prettyModel(model) : undefined,
-    branch,
-    tokens: sawTokens ? tokens : undefined,
+    complete,
+    meta: {
+      model: model ? prettyModel(model) : undefined,
+      branch,
+      tokens: sawTokens ? tokens : undefined,
+    },
   };
 }
 
 /** Read enrichment facts from a transcript, cached while the file is unchanged. */
-export function readTranscriptMeta(transcriptPath?: string): TranscriptMeta {
+export function readTranscriptMeta(
+  transcriptPath?: string,
+  identity?: SessionIdentity,
+): TranscriptMeta {
   if (!transcriptPath) return {};
 
   let st: ReturnType<typeof statSync>;
@@ -101,12 +122,20 @@ export function readTranscriptMeta(transcriptPath?: string): TranscriptMeta {
     return {};
   }
 
-  const cached = cache.get(transcriptPath);
-  if (cached && cached.mtimeMs === st.mtimeMs && cached.size === st.size) {
+  const key = cacheKey(transcriptPath, identity);
+  const cached = cache.get(key);
+  if (
+    cached &&
+    cached.path === transcriptPath &&
+    cached.mtimeMs === st.mtimeMs &&
+    cached.size === st.size
+  ) {
     return cached.meta;
   }
+  const parsed = parse(transcriptPath);
+  if (cached && cached.path === transcriptPath && !parsed.complete) return cached.meta;
 
-  const meta = parse(transcriptPath);
-  cache.set(transcriptPath, { mtimeMs: st.mtimeMs, size: st.size, meta });
+  const meta = parsed.meta;
+  cache.set(key, { path: transcriptPath, mtimeMs: st.mtimeMs, size: st.size, meta });
   return meta;
 }
