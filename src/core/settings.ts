@@ -8,6 +8,7 @@
  */
 import { readJsonIfExists, writeJsonAtomic } from './json-file';
 import { settingsPath } from './paths';
+import { CLAUDE_CODE_HOOK_EVENTS } from '../provider/claude-code-events';
 
 /** Substring that identifies one of our hook commands. */
 export const HOOK_MARKER = 'vdp.js';
@@ -29,14 +30,7 @@ export interface Settings {
 }
 
 /** Claude Code event name -> the arg we pass to `vdp hook <arg>`. */
-export const HOOK_EVENTS: ReadonlyArray<{ name: string; arg: string }> = [
-  { name: 'SessionStart', arg: 'session-start' },
-  { name: 'UserPromptSubmit', arg: 'user-prompt-submit' },
-  { name: 'PreToolUse', arg: 'pre-tool-use' },
-  { name: 'Notification', arg: 'notification' },
-  { name: 'Stop', arg: 'stop' },
-  { name: 'SessionEnd', arg: 'session-end' },
-];
+export const HOOK_EVENTS = CLAUDE_CODE_HOOK_EVENTS;
 
 /**
  * A missing settings file is an empty one; a corrupt one is an error the
@@ -70,7 +64,7 @@ export function isOurEntry(entry: HookEntry): boolean {
 export function buildEntry(entryPath: string, arg: string): HookEntry {
   return {
     matcher: '*',
-    hooks: [{ type: 'command', command: `node "${entryPath}" hook ${arg}` }],
+    hooks: [{ type: 'command', command: `node "${entryPath}" hook claude-code ${arg}` }],
   };
 }
 

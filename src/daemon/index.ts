@@ -15,6 +15,7 @@ import { DaemonState } from '../core/daemon-state';
 import { presenceDir } from '../core/paths';
 import { SessionStore } from '../core/session-store';
 import { UserConfigFile } from '../core/user-config';
+import { createEnrichmentDispatcher, GitBranchResolver } from '../provider/enrichment';
 import { readTranscriptMeta } from '../provider/transcript';
 import { DiscordPresence } from './discord';
 import { createReconcileTick } from './reconcile';
@@ -34,10 +35,17 @@ export async function startDaemon(_args: string[] = []): Promise<void> {
   // tick so `vdp config` edits apply to the live card without a restart.
   const userConfig = new UserConfigFile(root);
   const discord = new DiscordPresence(userConfig.load().clientId);
+  const branchResolver = new GitBranchResolver();
+  const enrich = createEnrichmentDispatcher({
+    readers: {
+      'claude-code': (reference, identity) => readTranscriptMeta(reference, identity),
+    },
+    resolveBranch: (cwd) => branchResolver.resolve(cwd),
+  });
   const tick = createReconcileTick({
     store: new SessionStore(root),
     loadConfig: () => userConfig.load(),
-    enrich: (state) => readTranscriptMeta(state.enrichmentRef),
+    enrich,
     sink: discord,
     writeStatus: (status) => daemon.writeStatus(status),
     pid: process.pid,

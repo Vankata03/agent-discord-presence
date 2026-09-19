@@ -1,6 +1,13 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { translate, type HookPayload, type TranslateEnv } from '../src/provider/claude-code';
+import {
+  runHook,
+  translate,
+  type HookPayload,
+  type HookRuntime,
+  type TranslateEnv,
+} from '../src/provider/claude-code';
+import type { SessionIdentity, SessionMarkerPatch } from '../src/types';
 import type { ActivityState } from '../src/types';
 
 const NOW = 1_700_000_000_000;
@@ -25,7 +32,7 @@ function update(event: string, extra: Partial<HookPayload> = {}) {
 test('session-start resets the elapsed timer and reports a starting session', () => {
   assert.deepEqual(update('session-start', { source: 'startup' }), {
     kind: 'update',
-    id: 'sess-1',
+    identity: { provider: 'claude-code', sessionId: 'sess-1' },
     activityChanged: true,
     patch: {
       ...COMMON,
@@ -48,7 +55,7 @@ test('an auto-compaction keeps the original start time', () => {
   const r = update('session-start', { source: 'compact' });
   assert.deepEqual(r, {
     kind: 'update',
-    id: 'sess-1',
+    identity: { provider: 'claude-code', sessionId: 'sess-1' },
     activityChanged: false,
     patch: COMMON,
   });
@@ -66,7 +73,7 @@ test('user-prompt-submit means thinking; stop means idle; an unknown event means
       r,
       {
         kind: 'update',
-        id: 'sess-1',
+        identity: { provider: 'claude-code', sessionId: 'sess-1' },
         activityChanged: true,
         patch: { ...COMMON, state, activity, file: undefined },
       },
@@ -102,7 +109,7 @@ test('pre-tool-use maps every tool to an activity state and sentence', () => {
       r,
       {
         kind: 'update',
-        id: 'sess-1',
+        identity: { provider: 'claude-code', sessionId: 'sess-1' },
         activityChanged: true,
         patch: { ...COMMON, state, activity, file },
       },
@@ -139,17 +146,20 @@ test('a notification mentioning permission is waiting; any other notification is
   }
 });
 
-test('session-end ends the session and carries nothing else', () => {
-  assert.deepEqual(update('session-end'), { kind: 'end', id: 'sess-1' });
+test('session-end ends the provider-qualified session and carries nothing else', () => {
+  assert.deepEqual(update('session-end'), {
+    kind: 'end',
+    identity: { provider: 'claude-code', sessionId: 'sess-1' },
+  });
 });
 
 test('the session id falls back to the environment, then the event is dropped', () => {
   const noId: HookPayload = { cwd: '/work/my-app' };
   const fromEnv = translate('stop', noId, NOW, { ...ENV, sessionId: 'env-sess' });
-  assert.equal(fromEnv?.id, 'env-sess');
+  assert.equal(fromEnv?.identity.sessionId, 'env-sess');
   assert.deepEqual(translate('session-end', noId, NOW, { ...ENV, sessionId: 'env-sess' }), {
     kind: 'end',
-    id: 'env-sess',
+    identity: { provider: 'claude-code', sessionId: 'env-sess' },
   });
   assert.equal(translate('stop', noId, NOW, ENV), null);
   assert.equal(translate('session-end', noId, NOW, ENV), null);
@@ -160,7 +170,7 @@ test('a malformed payload is treated as empty: cwd comes from the environment', 
   const r = translate('user-prompt-submit', null, NOW, { cwd: '/srv/proj', sessionId: 's' });
   assert.deepEqual(r, {
     kind: 'update',
-    id: 's',
+    identity: { provider: 'claude-code', sessionId: 's' },
     activityChanged: true,
     patch: {
       cwd: '/srv/proj',
@@ -178,4 +188,81 @@ test('the payload cwd wins over the environment cwd', () => {
   assert.ok(r?.kind === 'update');
   assert.equal(r.patch.cwd, '/a/b');
   assert.equal(r.patch.project, 'b');
+});
+
+test('accepted updates record provider identity and ensure the daemon', async () => {
+  const records: Array<{
+    identity: SessionIdentity;
+    patch: SessionMarkerPatch;
+    now: number;
+    activityChanged: boolean;
+  }> = [];
+  const daemonRoots: string[] = [];
+  const runtime: HookRuntime = {
+    readInput: () => JSON.stringify(BASE),
+    now: () => NOW,
+    environment: () => ENV,
+    root: () => '/presence',
+    createStore: () => ({
+      record: (identity, patch, now, activityChanged) => {
+        records.push({ identity, patch, now, activityChanged });
+      },
+      end: () => {},
+    }),
+    ensureDaemon: (root) => daemonRoots.push(root),
+  };
+
+  await runHook(['stop'], runtime);
+
+  assert.equal(records.length, 1);
+  assert.deepEqual(records[0]?.identity, { provider: 'claude-code', sessionId: 'sess-1' });
+  assert.equal(records[0]?.now, NOW);
+  assert.equal(records[0]?.activityChanged, true);
+  assert.deepEqual(daemonRoots, ['/presence']);
+});
+
+test('session end is idempotent at the runner seam and never starts the daemon', async () => {
+  const ended: SessionIdentity[] = [];
+  let daemonStarts = 0;
+  const runtime: HookRuntime = {
+    readInput: () => JSON.stringify(BASE),
+    now: () => NOW,
+    environment: () => ENV,
+    root: () => '/presence',
+    createStore: () => ({
+      record: () => {},
+      end: (identity) => {
+        ended.push(identity);
+      },
+    }),
+    ensureDaemon: () => {
+      daemonStarts++;
+    },
+  };
+
+  await runHook(['session-end'], runtime);
+  await runHook(['session-end'], runtime);
+
+  assert.deepEqual(ended, [
+    { provider: 'claude-code', sessionId: 'sess-1' },
+    { provider: 'claude-code', sessionId: 'sess-1' },
+  ]);
+  assert.equal(daemonStarts, 0);
+});
+
+test('Claude Code hook runner fails open on malformed input and internal errors', async () => {
+  const runtime: HookRuntime = {
+    readInput: () => '{broken',
+    now: () => NOW,
+    environment: () => ({ cwd: '/work', sessionId: 'fallback' }),
+    root: () => '/presence',
+    createStore: () => {
+      throw new Error('unavailable');
+    },
+    ensureDaemon: () => {
+      throw new Error('unavailable');
+    },
+  };
+
+  await assert.doesNotReject(() => runHook(['stop'], runtime));
 });
