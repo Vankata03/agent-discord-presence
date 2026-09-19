@@ -4,7 +4,7 @@ Research date: 2026-09-19
 
 ## Decision summary
 
-**Discord Coding Presence is viable as the full identity, but it is descriptive and has a close category competitor.** The exact npm package name `discord-coding-presence` was not registered, GitHub's exact-phrase repository search returned no results, and the proposed owner repository `Vankata03/discord-coding-presence` returned `404` from GitHub's repository API. These are availability signals, not reservations.
+**Discord Coding Presence is viable as the full identity, but it is descriptive and has a close category competitor.** The exact npm package name `discord-coding-presence` was not registered, GitHub's exact-slug repository search returned no results, and the proposed owner repository `Vankata03/discord-coding-presence` returned `404` from GitHub's repository API. These are availability signals, not reservations.
 
 The name is understandable at a glance: it states that coding activity is represented in Discord. Its downside is low distinctiveness. The published package `discord-coding-status` is a directly adjacent competitor: it describes itself as a local Discord Rich Presence daemon for Claude Code and Codex. The published `agent-discord-presence` is another materially similar product, although it does not use the selected name.
 
@@ -16,12 +16,14 @@ Use `discord-coding-presence` for the package and target repository if the map s
 | --- | --- | --- |
 | npm package | [`GET /discord-coding-presence`](https://registry.npmjs.org/discord-coding-presence) returned `404`. | The exact npm package name was unregistered at the research date. |
 | GitHub target repository | [`GET /repos/Vankata03/discord-coding-presence`](https://api.github.com/repos/Vankata03/discord-coding-presence) returned `404`. | The desired repository path was unregistered for `Vankata03`. GitHub permits other owners to use the same repository name. |
-| GitHub phrase search | [Repository search for the exact phrase](https://api.github.com/search/repositories?q=%22Discord%20Coding%20Presence%22%20in%3Aname%2Cdescription%2Creadme) returned `total_count: 0`. | No public repository matched that exact phrase in its name, description, or README at the research date. It is not a global naming or legal search. |
+| GitHub repository slug | [Repository search for the exact slug](https://api.github.com/search/repositories?q=%22discord-coding-presence%22%20in%3Aname) returned `total_count: 0`. | No public repository name exactly matched the normalized slug at the research date. It is not a global naming or legal search. |
+| GitHub phrase search | [Repository search for the exact phrase](https://api.github.com/search/repositories?q=%22Discord%20Coding%20Presence%22) returned `total_count: 0`. | No public repository search result matched that exact phrase at the research date. |
 
 ## Materially similar identities
 
 - [`discord-coding-status` on npm](https://registry.npmjs.org/discord-coding-status/latest) is version `1.6.1`, describes itself as a local Discord Rich Presence daemon for Claude Code and Codex, and exposes the `discord-coding-status` executable. It is close in purpose and wording, but does not occupy the selected package or long command name.
 - [`agent-discord-presence` on npm](https://registry.npmjs.org/agent-discord-presence/latest) is version `0.0.3`, describes a shared Discord Rich Presence service for several coding agents, and exposes both `adp` and `agent-discord-presence`. It is materially similar in product scope, but its package and executable names differ.
+- [`vibecoder-discord-presence` on npm](https://registry.npmjs.org/vibecoder-discord-presence/latest) is the current product's published package, version `1.1.0`, rather than an external collision. A full rebrand must explicitly replace or deprecate that package as the release-plan decision requires.
 
 ## Limits and follow-up gate
 
