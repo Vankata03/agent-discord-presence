@@ -17,6 +17,9 @@ import type { DaemonStatus } from '../core/daemon-state';
 import { renderPresence } from '../core/presence';
 import type { SessionStore } from '../core/session-store';
 import type { AggregatedState, PresencePayload, Theme } from '../types';
+import type { Enrichment } from '../provider/enrichment';
+
+export type { Enrichment } from '../provider/enrichment';
 
 /** Where a rendered presence payload goes. */
 export interface PresenceSink {
@@ -24,9 +27,6 @@ export interface PresenceSink {
   setActivity(payload: PresencePayload): Promise<void>;
   clearActivity(): Promise<void>;
 }
-
-/** Facts filled in from the transcript when the provider did not supply them. */
-export type Enrichment = Pick<AggregatedState, 'model' | 'branch' | 'tokens'>;
 
 export interface ReconcileDeps {
   store: Pick<SessionStore, 'snapshot'>;
@@ -69,6 +69,7 @@ export function createReconcileTick(
         model: snapshot.model ?? meta.model,
         branch: snapshot.branch ?? meta.branch,
         tokens: snapshot.tokens ?? meta.tokens,
+        cost: snapshot.cost ?? meta.cost,
       };
       const { theme } = deps.loadConfig();
       await deps.sink.setActivity(renderPresence(theme, state, now));

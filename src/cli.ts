@@ -48,7 +48,7 @@ export async function run(argv: string[]): Promise<void> {
     case 'status':
       return (await import('./commands/status')).status(rest);
     case 'hook':
-      return (await import('./provider/claude-code')).runHook(rest);
+      return (await import('./provider/dispatch')).dispatchHook(rest);
     case 'daemon':
       return (await import('./daemon/index')).startDaemon(rest);
     case '--version':

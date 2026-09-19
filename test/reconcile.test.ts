@@ -118,6 +118,20 @@ test('enrichment fills model, branch and tokens the provider did not know', asyn
   assert.equal(enrichedWith[0]?.enrichmentRef, '/t.jsonl', 'enrichment sees the snapshot');
 });
 
+test('enrichment fills cost and the selected session supplies the timer', async () => {
+  record('older', { activity: 'Idle', startedAt: NOW - 10 * MIN }, NOW - MIN);
+  record('current', { activity: 'Thinking', startedAt: NOW - MIN }, NOW);
+  enrichment = { cost: 2.5 };
+  theme = { ...THEME, details: '{cost}' };
+  const tick = createReconcileTick(deps());
+
+  await tick(NOW);
+
+  assert.equal(sink.payloads[0]?.details, '$2.50');
+  assert.equal(sink.payloads[0]?.startTimestamp, NOW - MIN);
+  assert.equal(enrichedWith[0]?.sessionId, 'current');
+});
+
 test('config is re-read every tick, so a saved theme change reaches the next payload', async () => {
   record('s1', { project: 'app', activity: 'Thinking' }, NOW);
   const tick = createReconcileTick(deps());
