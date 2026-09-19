@@ -1,5 +1,9 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
+import { execFileSync } from 'node:child_process';
+import { mkdirSync, mkdtempSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import {
   createEnrichmentDispatcher,
   GitBranchResolver,
@@ -142,4 +146,45 @@ test('Git branch resolver caches non-repository working directories', () => {
   assert.equal(resolver.resolve('/not/a/repository'), undefined);
   assert.equal(resolver.resolve('/not/a/repository'), undefined);
   assert.equal(calls, 1);
+});
+
+test('Git branch resolution ignores inherited repository-location variables', () => {
+  const root = mkdtempSync(join(tmpdir(), 'vdp-git-env-'));
+  const selected = join(root, 'selected');
+  const foreign = join(root, 'foreign');
+  mkdirSync(selected);
+  mkdirSync(foreign);
+  const initialize = (cwd: string, branch: string): void => {
+    execFileSync('git', ['init', '-b', branch], { cwd, stdio: 'ignore' });
+    execFileSync(
+      'git',
+      [
+        '-c',
+        'user.name=VDP Test',
+        '-c',
+        'user.email=vdp@example.invalid',
+        'commit',
+        '--allow-empty',
+        '-m',
+        'init',
+      ],
+      { cwd, stdio: 'ignore' },
+    );
+  };
+  initialize(selected, 'selected-branch');
+  initialize(foreign, 'foreign-branch');
+
+  const previousDir = process.env.GIT_DIR;
+  const previousWorkTree = process.env.GIT_WORK_TREE;
+  try {
+    process.env.GIT_DIR = join(foreign, '.git');
+    process.env.GIT_WORK_TREE = foreign;
+    assert.equal(new GitBranchResolver().resolve(selected), 'selected-branch');
+  } finally {
+    if (previousDir === undefined) delete process.env.GIT_DIR;
+    else process.env.GIT_DIR = previousDir;
+    if (previousWorkTree === undefined) delete process.env.GIT_WORK_TREE;
+    else process.env.GIT_WORK_TREE = previousWorkTree;
+    rmSync(root, { recursive: true, force: true });
+  }
 });

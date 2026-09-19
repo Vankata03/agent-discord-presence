@@ -79,12 +79,30 @@ type BranchCacheEntry =
   | (RepositoryState & { kind: 'repository'; expiresAt: number })
   | { kind: 'miss'; path: string; expiresAt: number };
 
+const GIT_REPOSITORY_ENVIRONMENT = [
+  'GIT_DIR',
+  'GIT_WORK_TREE',
+  'GIT_INDEX_FILE',
+  'GIT_OBJECT_DIRECTORY',
+  'GIT_ALTERNATE_OBJECT_DIRECTORIES',
+  'GIT_COMMON_DIR',
+  'GIT_NAMESPACE',
+  'GIT_CEILING_DIRECTORIES',
+  'GIT_DISCOVERY_ACROSS_FILESYSTEM',
+] as const;
+
+function gitEnvironment(): NodeJS.ProcessEnv {
+  const env = { ...process.env };
+  for (const name of GIT_REPOSITORY_ENVIRONMENT) delete env[name];
+  return env;
+}
+
 function readRepository(cwd: string): RepositoryState | null {
   try {
     const output = execFileSync(
       'git',
       ['-C', cwd, 'rev-parse', '--show-toplevel', '--abbrev-ref', 'HEAD'],
-      { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] },
+      { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'], env: gitEnvironment() },
     );
     const [root, rawBranch] = output.trim().split(/\r?\n/);
     if (!root) return null;
