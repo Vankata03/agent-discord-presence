@@ -21,6 +21,14 @@ test('canonical hook routes select only the named provider', async () => {
   assert.deepEqual(calls, [{ provider: 'claude-code', args: ['stop'] }]);
 });
 
+test('the codex route reaches the Codex runner', async () => {
+  const calls: Array<{ provider: string; args: string[] }> = [];
+  await dispatchHook(['codex', 'session-start'], async (provider) => async (args) => {
+    calls.push({ provider, args });
+  });
+  assert.deepEqual(calls, [{ provider: 'codex', args: ['session-start'] }]);
+});
+
 test('legacy unqualified Claude Code events remain accepted', async () => {
   const calls: string[][] = [];
   const load: HookRunnerLoader = async (provider) => {

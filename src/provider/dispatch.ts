@@ -28,6 +28,8 @@ async function loadHookRunner(provider: ProviderKey): Promise<HookRunner | null>
   switch (provider) {
     case 'claude-code':
       return (await import('./claude-code')).runHook;
+    case 'codex':
+      return (await import('./codex')).runHook;
     default:
       return null;
   }

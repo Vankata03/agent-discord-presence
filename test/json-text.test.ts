@@ -71,3 +71,21 @@ test('duplicate keys fall back to a full re-serialization', () => {
 test('formatJson matches the layout VDP has always written', () => {
   assert.equal(formatJson({ a: 1 }), '{\n  "a": 1\n}\n');
 });
+
+test('array elements that survive keep their exact text', () => {
+  const text = '{\n  "Stop": [ { "hooks": [ "say done" ] } ]\n}\n';
+  const before = JSON.parse(text) as { Stop: unknown[] };
+  const added = { Stop: [...before.Stop, { hooks: ['ours'] }] };
+  const withOurs = rewriteJson(text, before, added);
+  assert.equal(withOurs, '{\n  "Stop": [ { "hooks": [ "say done" ] }, {"hooks":["ours"]} ]\n}\n');
+  assert.equal(rewriteJson(withOurs, added, before), text, 'removing ours restores the original');
+});
+
+test('multi-line arrays get new elements on their own lines', () => {
+  const text = '{\n  "Stop": [\n    {"a": 1},\n    {"b": 2}\n  ]\n}';
+  const before = JSON.parse(text) as { Stop: unknown[] };
+  assert.equal(
+    rewriteJson(text, before, { Stop: [{ c: 3 }, { a: 1 }] }),
+    '{\n  "Stop": [\n    {\n      "c": 3\n    },\n    {"a": 1}\n  ]\n}',
+  );
+});

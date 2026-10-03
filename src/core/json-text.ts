@@ -3,10 +3,12 @@
  *
  * Re-serializing a whole settings file would reflow everything VDP did not
  * touch (inline arrays, spacing, key layout). Instead `rewriteJson` walks the
- * original text alongside the before/after values and rewrites only the object
- * members whose values changed, so every untouched member keeps its exact
- * bytes. New or changed values are serialized in the file's own layout:
- * indent unit, line endings, member nesting, and `key: value` spacing.
+ * original text alongside the before/after values and rewrites only what
+ * changed: object members whose values changed, and array elements that were
+ * added or removed. Every untouched member and element keeps its exact bytes.
+ * New or changed values follow the file's own layout: indent unit, line
+ * endings, nesting, `key: value` spacing, and single-line containers stay on
+ * one line.
  *
  * The input text must already be valid JSON (callers parse it first). Text
  * with duplicate keys, whose meaning differs between parsers, falls back to a
@@ -19,12 +21,21 @@ interface Layout {
   eol: '\n' | '\r\n';
 }
 
-interface Member {
-  key: string;
-  keyStart: number;
-  keyEnd: number;
+/** One object member or array element in the original text. */
+interface Item {
+  /** Where the item starts: the key for a member, the value for an element. */
+  start: number;
   valueStart: number;
   valueEnd: number;
+  /** Member key; undefined for array elements. */
+  key?: string;
+  keyEnd?: number;
+}
+
+/** A piece of the rewritten container: its text and the original item it keeps, if any. */
+interface Piece {
+  text: string;
+  index: number | null;
 }
 
 const DEFAULT_LAYOUT: Layout = { unit: '  ', eol: '\n' };
@@ -65,27 +76,33 @@ function scanValue(t: string, i: number): number {
   return i;
 }
 
-/** `t[open]` is `{`; returns its members and the index of its `}`. */
-function scanMembers(t: string, open: number): { members: Member[]; close: number } {
-  const members: Member[] = [];
+/** `t[open]` is `{` or `[`; returns its items and the index of its closing bracket. */
+function scanItems(t: string, open: number): { items: Item[]; close: number } {
+  const isObject = t[open] === '{';
+  const items: Item[] = [];
   let i = skipWs(t, open + 1);
-  if (t[i] === '}') return { members, close: i };
+  if (t[i] === '}' || t[i] === ']') return { items, close: i };
   for (;;) {
-    const keyStart = i;
-    const keyEnd = scanString(t, i);
-    const valueStart = skipWs(t, skipWs(t, keyEnd) + 1); // past ':'
-    const valueEnd = scanValue(t, valueStart);
-    members.push({
-      key: JSON.parse(t.slice(keyStart, keyEnd)) as string,
-      keyStart,
-      keyEnd,
-      valueStart,
+    const start = i;
+    let keyEnd: number | undefined;
+    if (isObject) {
+      keyEnd = scanString(t, i);
+      i = skipWs(t, skipWs(t, keyEnd) + 1); // past ':'
+    }
+    const valueEnd = scanValue(t, i);
+    items.push({
+      start,
+      valueStart: i,
       valueEnd,
+      keyEnd,
+      key: keyEnd === undefined ? undefined : (JSON.parse(t.slice(start, keyEnd)) as string),
     });
     i = skipWs(t, valueEnd);
     if (t[i] !== ',') {
-      if (new Set(members.map((m) => m.key)).size !== members.length) throw new DuplicateKeys();
-      return { members, close: i };
+      if (isObject && new Set(items.map((m) => m.key)).size !== items.length) {
+        throw new DuplicateKeys();
+      }
+      return { items, close: i };
     }
     i = skipWs(t, i + 1);
   }
@@ -101,10 +118,9 @@ function detectLayout(t: string): Layout {
   const eol = t.includes('\r\n') ? '\r\n' : '\n';
   const open = t.indexOf('{');
   if (open < 0) return { ...DEFAULT_LAYOUT, eol };
-  const { members } = scanMembers(t, open);
-  const first = members[0];
+  const first = scanItems(t, open).items[0];
   if (!first) return { ...DEFAULT_LAYOUT, eol };
-  return { unit: lineIndent(t, open, first.keyStart) ?? '', eol };
+  return { unit: lineIndent(t, open, first.start) ?? '', eol };
 }
 
 /** Serialize `value` to sit at a position whose line is indented by `indent`. */
@@ -112,11 +128,75 @@ function serializeAt(value: unknown, indent: string, layout: Layout): string {
   return JSON.stringify(value, null, layout.unit).replace(/\n/g, layout.eol + indent);
 }
 
-/**
- * Rewrite the object spanning `t[open]..` from `before` to `after`, keeping
- * the bytes of every member whose value did not change. `indent` is the
- * indentation of the line the object starts on.
- */
+/** Where a container's items sit and how new ones are laid out. */
+interface ItemLayout {
+  /** Indentation of each item's line, or null when the container is on one line. */
+  indent: string | null;
+  sep: string;
+  serialize: (value: unknown) => string;
+}
+
+function itemLayout(t: string, open: number, items: Item[], layout: Layout): ItemLayout {
+  const [first, second] = items;
+  const indent = first ? lineIndent(t, open, first.start) : null;
+  const sep = second
+    ? t.slice(first!.valueEnd, second.start)
+    : indent !== null
+      ? `,${layout.eol}${indent}`
+      : layout.unit === ''
+        ? ','
+        : ', ';
+  const serialize =
+    indent !== null
+      ? (value: unknown) => serializeAt(value, indent, layout)
+      : (value: unknown) => JSON.stringify(value); // single-line containers stay single-line
+  return { indent, sep, serialize };
+}
+
+/** Join pieces; originally adjacent items keep the separator they had. */
+function assemble(
+  t: string,
+  open: number,
+  close: number,
+  items: Item[],
+  pieces: Piece[],
+  sep: string,
+): string {
+  const first = items[0];
+  const last = items[items.length - 1];
+  if (!first || !last) return ''; // callers handle empty originals
+  let out = t.slice(open, first.start);
+  pieces.forEach((piece, j) => {
+    if (j > 0) {
+      const prevIndex = pieces[j - 1]?.index;
+      const adjacent =
+        prevIndex !== null && prevIndex !== undefined && piece.index === prevIndex + 1;
+      out += adjacent ? t.slice(items[prevIndex]!.valueEnd, items[piece.index!]!.start) : sep;
+    }
+    out += piece.text;
+  });
+  return out + t.slice(last.valueEnd, close + 1);
+}
+
+/** Rewrite the value at `t[at]` from `before` to `after`; `indent` is its line's indentation. */
+function patchValue(
+  t: string,
+  at: number,
+  before: unknown,
+  after: unknown,
+  indent: string,
+  layout: Layout,
+): string {
+  if (same(before, after)) return t.slice(at, scanValue(t, at));
+  if (isPlainObject(before) && isPlainObject(after) && t[at] === '{') {
+    return patchObject(t, at, before, after, indent, layout);
+  }
+  if (Array.isArray(before) && Array.isArray(after) && t[at] === '[') {
+    return patchArray(t, at, before, after, indent, layout);
+  }
+  return serializeAt(after, indent, layout);
+}
+
 function patchObject(
   t: string,
   open: number,
@@ -125,56 +205,56 @@ function patchObject(
   indent: string,
   layout: Layout,
 ): string {
-  const { members, close } = scanMembers(t, open);
+  const { items, close } = scanItems(t, open);
   const keys = Object.keys(after);
   if (keys.length === 0) return '{}';
-  const first = members[0];
-  const last = members[members.length - 1];
-  if (!first || !last) return serializeAt(after, indent, layout);
+  const first = items[0];
+  if (!first || first.keyEnd === undefined) return serializeAt(after, indent, layout);
 
-  const ownLine = lineIndent(t, open, first.keyStart);
-  // An object written inline inside a pretty file has no member layout to copy.
-  if (ownLine === null && layout.unit !== '') return serializeAt(after, indent, layout);
-  const memberIndent = ownLine ?? '';
+  const { indent: own, sep, serialize } = itemLayout(t, open, items, layout);
   const colon = t.slice(first.keyEnd, first.valueStart);
-  const defaultSep = members[1]
-    ? t.slice(first.valueEnd, members[1].keyStart)
-    : layout.unit === ''
-      ? ','
-      : `,${layout.eol}${memberIndent}`;
-
-  const byKey = new Map(members.map((m, index) => [m.key, { m, index }]));
-  const pieces: Array<{ text: string; index: number | null }> = keys.map((key) => {
-    const found = byKey.get(key);
-    const value = after[key];
-    if (!found) {
-      return {
-        text: `${JSON.stringify(key)}${colon}${serializeAt(value, memberIndent, layout)}`,
-        index: null,
-      };
+  const byKey = new Map(items.map((m, index) => [m.key, index]));
+  const pieces = keys.map((key): Piece => {
+    const index = byKey.get(key);
+    const m = index === undefined ? undefined : items[index];
+    if (index === undefined || !m) {
+      return { text: `${JSON.stringify(key)}${colon}${serialize(after[key])}`, index: null };
     }
-    const { m, index } = found;
-    const old = before[key];
-    let valueText: string;
-    if (same(old, value)) valueText = t.slice(m.valueStart, m.valueEnd);
-    else if (isPlainObject(old) && isPlainObject(value) && t[m.valueStart] === '{') {
-      valueText = patchObject(t, m.valueStart, old, value, memberIndent, layout);
-    } else valueText = serializeAt(value, memberIndent, layout);
-    return { text: t.slice(m.keyStart, m.valueStart) + valueText, index };
+    const value = patchValue(t, m.valueStart, before[key], after[key], own ?? indent, layout);
+    return { text: t.slice(m.start, m.valueStart) + value, index };
   });
+  return assemble(t, open, close, items, pieces, sep);
+}
 
-  // Members that were neighbours originally keep their original separator.
-  let out = t.slice(open, first.keyStart);
-  pieces.forEach((piece, j) => {
-    if (j > 0) {
-      const prev = members[pieces[j - 1]?.index ?? -1];
-      const next = piece.index === null ? undefined : members[piece.index];
-      const adjacent = prev && next && members.indexOf(next) === members.indexOf(prev) + 1;
-      out += adjacent ? t.slice(prev.valueEnd, next.keyStart) : defaultSep;
+/**
+ * Arrays keep every element that survives unchanged (matched in order), drop
+ * removed ones, and serialize only new or changed elements.
+ */
+function patchArray(
+  t: string,
+  open: number,
+  before: unknown[],
+  after: unknown[],
+  indent: string,
+  layout: Layout,
+): string {
+  const { items, close } = scanItems(t, open);
+  if (after.length === 0) return '[]';
+  if (items.length === 0) return serializeAt(after, indent, layout);
+
+  const { sep, serialize } = itemLayout(t, open, items, layout);
+  let cursor = 0;
+  const pieces = after.map((value): Piece => {
+    for (let k = cursor; k < before.length; k++) {
+      const item = items[k];
+      if (item && same(before[k], value)) {
+        cursor = k + 1;
+        return { text: t.slice(item.start, item.valueEnd), index: k };
+      }
     }
-    out += piece.text;
+    return { text: serialize(value), index: null };
   });
-  return out + t.slice(last.valueEnd, close + 1);
+  return assemble(t, open, close, items, pieces, sep);
 }
 
 /** Default layout for a file VDP creates: two-space indent, trailing newline. */
@@ -184,8 +264,8 @@ export function formatJson(value: unknown): string {
 
 /**
  * Return `text` (which parses to `before`) edited to represent `after`, with
- * untouched members byte-for-byte intact. A leading BOM, leading whitespace
- * and trailing text around the root object are preserved too.
+ * untouched members and elements byte-for-byte intact. A leading BOM, leading
+ * whitespace and trailing text around the root object are preserved too.
  */
 export function rewriteJson(text: string, before: unknown, after: unknown): string {
   const open = text.indexOf('{');
