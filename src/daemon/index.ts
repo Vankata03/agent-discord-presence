@@ -39,6 +39,9 @@ export async function startDaemon(_args: string[] = []): Promise<void> {
   const enrich = createEnrichmentDispatcher({
     readers: {
       'claude-code': (reference, identity) => readTranscriptMeta(reference, identity),
+      // Rollout enrichment lands with the activity ledger; until then Codex
+      // reports its model on every hook and the branch still resolves from cwd.
+      codex: () => ({}),
     },
     resolveBranch: (cwd) => branchResolver.resolve(cwd),
   });

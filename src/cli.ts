@@ -18,7 +18,7 @@ function helpText(): string {
     `${ui.title('vdp')} ${ui.dim('— vibecoder-discord-presence')}`,
     '',
     ui.bold('Usage:'),
-    row('install', 'Add Claude Code hooks (~/.claude/settings.json)'),
+    row('install', 'Add hooks to every supported coding tool found'),
     row('stop', 'Stop the running daemon'),
     row('restart', 'Restart the daemon'),
     row('uninstall', 'Remove hooks, stop the daemon, restore settings'),

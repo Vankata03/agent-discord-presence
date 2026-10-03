@@ -37,6 +37,7 @@ function fake(provider: ProviderKey, log: string[], options: FakeOptions = {}): 
         options.install ?? { written: ['/w'], backups: [], registered: ['SessionStart'] },
       );
     },
+    inspect: async () => ({ present: 0, expected: 1 }),
     uninstall: async () => {
       log.push(`uninstall:${provider}`);
       return outcome(options.uninstall ?? { removed: 1, surviving: [], backups: [] });

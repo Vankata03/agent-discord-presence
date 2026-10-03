@@ -47,6 +47,14 @@ export interface UninstallResult {
   backups: string[];
 }
 
+/** What `vdp status` shows for one provider: how many of our hooks are registered. */
+export interface HookInventory {
+  present: number;
+  expected: number;
+  /** Set when the configuration could not be read. */
+  error?: string;
+}
+
 export interface ProviderInstaller {
   readonly provider: ProviderKey;
   /** Every location this adapter may own; reported if cleanup fails outright. */
@@ -56,6 +64,8 @@ export interface ProviderInstaller {
   install(context: InstallContext): Promise<InstallResult>;
   /** Called regardless of detection; inspects every location this adapter may own. */
   uninstall(): Promise<UninstallResult>;
+  /** Read-only count of our registered hooks, for `vdp status`. */
+  inspect(): Promise<HookInventory>;
 }
 
 export type ProviderInstallReport =
@@ -164,6 +174,9 @@ export async function uninstallProviders(
 
 /** Every shipped provider adapter, in report order. */
 export async function defaultInstallers(): Promise<ProviderInstaller[]> {
-  const { ClaudeCodeInstaller } = await import('./claude-code-install');
-  return [new ClaudeCodeInstaller()];
+  const [{ ClaudeCodeInstaller }, { CodexInstaller }] = await Promise.all([
+    import('./claude-code-install'),
+    import('./codex-install'),
+  ]);
+  return [new ClaudeCodeInstaller(), new CodexInstaller()];
 }

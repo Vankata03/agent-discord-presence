@@ -23,6 +23,11 @@ export function claudeDir(): string {
   return process.env.CLAUDE_CONFIG_DIR || path.join(os.homedir(), '.claude');
 }
 
+/** Codex's home directory (~/.codex unless CODEX_HOME overrides it). */
+export function codexHome(): string {
+  return process.env.CODEX_HOME || path.join(os.homedir(), '.codex');
+}
+
 /** Claude Code's settings file we add hooks to. */
 export function settingsPath(): string {
   return path.join(claudeDir(), 'settings.json');

@@ -8,12 +8,9 @@
  * (refreshing the session's heartbeat) and exits. Any non-end event lazily
  * spawns the daemon if one isn't already running.
  *
- * The translation rules are the pure, exported `translate`; the hook runner
- * around it is a thin adapter (stdin → translate → store → ensure daemon).
- *
- * Hard rule: the hook path must NEVER throw or hang — it runs inside Claude
- * Code's hook execution. Everything is wrapped; errors are swallowed and we
- * still succeed.
+ * The translation rules are the pure, exported `translate`; the shared hook
+ * runner (hook-runner.ts) wraps it: stdin → translate → store → ensure daemon,
+ * never throwing or hanging inside Claude Code's hook execution.
  *
  * This module is the only Claude-Code-specific part of the system. Other tools
  * get their own provider that produces the same marker contract (see
@@ -22,15 +19,13 @@
  * Hook payload shapes are documented from a live session — see claupit's
  * hooks-findings.md (session_id, cwd, transcript_path, tool_name, tool_input…).
  */
-import { readFileSync } from 'node:fs';
 import { basename } from 'node:path';
-import { DaemonState, isProcessAlive, spawnDaemon } from '../core/daemon-state';
-import { presenceDir } from '../core/paths';
-import { SessionStore } from '../core/session-store';
-import type { ActivityState, SessionIdentity, SessionMarkerPatch } from '../types';
+import type { ActivityState, SessionMarkerPatch } from '../types';
+import { defaultHookRuntime, parsePayload, runProviderHook, type HookRuntime } from './hook-runner';
 import type { TranslateEnv, Translation } from './types';
 
 export type { TranslateEnv, Translation } from './types';
+export type { HookRuntime, HookStore } from './hook-runner';
 
 /** What Claude Code writes to the hook's stdin. Every field is optional. */
 export interface HookPayload {
@@ -50,24 +45,6 @@ interface Activity {
   state: ActivityState;
   activity: string;
   file?: string;
-}
-
-function readStdin(): string {
-  try {
-    return readFileSync(0, 'utf8');
-  } catch {
-    return '';
-  }
-}
-
-function parsePayload(raw: string): HookPayload | null {
-  if (!raw) return null;
-  try {
-    const clean = raw.charCodeAt(0) === 0xfeff ? raw.slice(1) : raw;
-    return JSON.parse(clean) as HookPayload;
-  } catch {
-    return null;
-  }
 }
 
 function fileFromInput(input: Record<string, unknown> | undefined): string | undefined {
@@ -125,10 +102,6 @@ function activityFor(event: string, payload: HookPayload): Activity {
 }
 
 /**
- * What the hook runner learned from the environment when the payload is
- * silent: the session id Claude Code exports, and the process cwd.
- */
-/**
  * Translate one Claude Code hook event into a marker update. Pure: `now` and
  * the environment are passed in, and a malformed (null) payload is treated as
  * empty so the fallbacks decide.
@@ -168,76 +141,18 @@ export function translate(
   return { kind: 'update', identity, patch, activityChanged: !isCompaction };
 }
 
-/**
- * Spawn the daemon detached unless a live one is already running. Best-effort,
- * never throws.
- *
- * The check is liveness-aware (not just "does the lock file exist"): a stale
- * lock left by a crashed daemon must NOT block a respawn. If the lock is stale
- * we still spawn — the daemon's own acquireLock takes the stale lock over
- * atomically, and if two hooks race here only one daemon wins the lock.
- */
-function ensureDaemon(root: string): void {
-  const lock = new DaemonState(root).readLock();
-  if (lock && isProcessAlive(lock.pid)) return; // a live daemon already owns it
-  spawnDaemon(); // no lock, or a stale one — the daemon's acquireLock settles races
-}
-
-export interface HookStore {
-  record(
-    identity: SessionIdentity,
-    patch: SessionMarkerPatch,
-    now: number,
-    activityChanged: boolean,
-  ): void;
-  end(identity: SessionIdentity): void;
-}
-
-/** Runtime boundary for the short-lived Claude Code hook process. */
-export interface HookRuntime {
-  readInput: () => string;
-  now: () => number;
-  environment: () => TranslateEnv;
-  root: () => string;
-  createStore: (root: string) => HookStore;
-  ensureDaemon: (root: string) => void;
-}
-
-const DEFAULT_HOOK_RUNTIME: HookRuntime = {
-  readInput: readStdin,
-  now: Date.now,
-  environment: () => ({
-    sessionId: process.env.CLAUDE_CODE_SESSION_ID,
-    cwd: process.cwd(),
-  }),
-  root: presenceDir,
-  createStore: (root) => new SessionStore(root),
-  ensureDaemon,
-};
+const DEFAULT_HOOK_RUNTIME = defaultHookRuntime(() => ({
+  sessionId: process.env.CLAUDE_CODE_SESSION_ID,
+  cwd: process.cwd(),
+}));
 
 export async function runHook(
   args: string[] = [],
   runtime: HookRuntime = DEFAULT_HOOK_RUNTIME,
 ): Promise<void> {
-  try {
-    const event = args[0] ?? 'unknown';
-    const now = runtime.now();
-    const result = translate(event, parsePayload(runtime.readInput()), now, runtime.environment());
-    if (!result) return;
-
-    const root = runtime.root();
-    const store = runtime.createStore(root);
-    if (result.kind === 'end') {
-      store.end(result.identity);
-      return;
-    }
-    store.record(result.identity, result.patch, now, result.activityChanged);
-
-    // Any non-end event means the session is active, so make sure a daemon is
-    // up — this self-heals after idle, a mid-session install, or a daemon crash.
-    // (session-end returned above, so we never resurrect a daemon for a dying one.)
-    runtime.ensureDaemon(root);
-  } catch {
-    // A broken presence tool must never break Claude Code.
-  }
+  return runProviderHook(
+    args,
+    (event, raw, now, env) => translate(event, parsePayload<HookPayload>(raw), now, env),
+    runtime,
+  );
 }

@@ -31,10 +31,11 @@ test('reinstall replaces legacy VDP routes and uninstall removes both shapes', (
     },
   };
 
+  // Replaced in place, so the foreign entry keeps its position.
   const merged = mergeHooks(legacy, 'C:/vdp.js');
   assert.deepEqual(
     merged.hooks?.Stop?.map((entry) => entry.hooks?.[0]?.command),
-    ['foreign-hook stop', 'node "C:/vdp.js" hook claude-code stop'],
+    ['node "C:/vdp.js" hook claude-code stop', 'foreign-hook stop'],
   );
 
   const { cleaned, removed } = stripOurHooks(merged);
@@ -72,6 +73,7 @@ test('merge keeps the position of existing hook events', () => {
 
 test('a foreign command that merely mentions vdp.js is not ours', () => {
   assert.equal(isOurEntry({ hooks: [{ command: 'cat ~/notes/vdp.js' }] }), false);
+  assert.equal(isOurEntry({ hooks: [{ command: 'node "/a/vdp.js" hook codex stop' }] }), false);
   assert.equal(isOurEntry({ hooks: [{ command: 'node "/a/vdp.js" hook stop' }] }), true);
 });
 
