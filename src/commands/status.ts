@@ -21,7 +21,7 @@ export async function status(_args: string[] = []): Promise<void> {
   const root = presenceDir();
 
   // Hooks installed?
-  const settings = await readSettings();
+  const settings = readSettings();
   const installed = HOOK_EVENTS.filter((e) => (settings.hooks?.[e.name] ?? []).some(isOurEntry));
   const hooksOk = installed.length === HOOK_EVENTS.length;
 
