@@ -78,11 +78,17 @@ name; built-in themes do not reveal it.
 
 | Command                    | What it does                                   |
 | -------------------------- | ---------------------------------------------- |
-| `vdp install`              | Set it up                                      |
+| `vdp install`              | Set it up for every supported tool it finds    |
 | `vdp config`               | Customize the card                             |
 | `vdp status`               | See what's running                             |
 | `vdp stop` / `vdp restart` | Control the background process                 |
 | `vdp uninstall [--purge]`  | Remove it (`--purge` also deletes your config) |
+
+`vdp install` only adds its own hook entries: your other settings keep their
+exact formatting, and the original file is backed up (`settings.json.<time>.bak`)
+before it's changed. If a tool's settings can't be safely edited, that tool is
+skipped with an error and the command exits non-zero. `--purge` only deletes
+your data once every hook has been removed.
 
 ## Privacy
 

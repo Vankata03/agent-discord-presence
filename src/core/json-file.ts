@@ -53,8 +53,13 @@ export function writeJsonAtomic(
   value: unknown,
   options: WriteJsonOptions = {},
 ): void {
-  mkdirSync(dirname(path), { recursive: true });
   const body = options.pretty ? `${JSON.stringify(value, null, 2)}\n` : JSON.stringify(value);
+  writeTextAtomic(path, body);
+}
+
+/** Write already-serialized text atomically (temp file + rename), creating parent dirs. */
+export function writeTextAtomic(path: string, body: string): void {
+  mkdirSync(dirname(path), { recursive: true });
   const tmp = `${path}.${process.pid}.tmp`;
   writeFileSync(tmp, body);
   renameSync(tmp, path);
