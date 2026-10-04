@@ -18,10 +18,11 @@
  * read. A rollout that does not start with a supported `session_meta` record
  * yields no facts at all; the public hooks keep working without them.
  *
- * Reads are incremental: each read parses only the bytes appended since the
- * last one, so a long session costs no more per tick than a short one.
+ * Reads are incremental (core/jsonl-tail.ts): each read parses only the bytes
+ * appended since the last one, so a long session costs no more per tick than a
+ * short one.
  */
-import { closeSync, fstatSync, openSync, readSync } from 'node:fs';
+import { JsonlTail } from '../core/jsonl-tail';
 import type { SessionIdentity } from '../types';
 
 export interface RolloutFacts {
@@ -29,24 +30,11 @@ export interface RolloutFacts {
   tokens?: number;
 }
 
-interface CacheEntry {
-  path: string;
-  /** Identifies the file itself, so a replacement at the same path is noticed. */
-  ino: number;
-  /** Bytes consumed so far: always the end of a complete line. */
-  offset: number;
-  size: number;
-  mtimeMs: number;
+interface RolloutState {
   /** Undefined until the first record is complete. */
   supported?: boolean;
   facts: RolloutFacts;
 }
-
-const MAX_CACHED_SESSIONS = 32;
-const CHUNK_BYTES = 1 << 20;
-const NEWLINE = 0x0a;
-
-const cache = new Map<string, CacheEntry>();
 
 /** Cache per session identity, so facts never carry across sessions. */
 function cacheKey(path: string, identity?: SessionIdentity): string {
@@ -68,8 +56,8 @@ function isSessionMeta(record: RolloutRecord): boolean {
   return record.type === 'session_meta' && typeof record.payload?.cli_version === 'string';
 }
 
-/** Fold one complete line into the entry. */
-function consume(entry: CacheEntry, line: string): void {
+/** Fold one complete line into the state. */
+function consume(state: RolloutState, line: string): void {
   if (line.trim() === '') return;
   let record: RolloutRecord;
   try {
@@ -77,90 +65,33 @@ function consume(entry: CacheEntry, line: string): void {
     if (typeof parsed !== 'object' || parsed === null) throw new Error('not a record');
     record = parsed as RolloutRecord;
   } catch {
-    if (entry.supported === undefined) entry.supported = false;
+    if (state.supported === undefined) state.supported = false;
     return;
   }
-  if (entry.supported === undefined) {
-    entry.supported = isSessionMeta(record);
+  if (state.supported === undefined) {
+    state.supported = isSessionMeta(record);
     return;
   }
-  if (!entry.supported) return;
+  if (!state.supported) return;
 
   const payload = record.payload;
   if (typeof payload !== 'object' || payload === null) return;
   if (record.type === 'turn_context') {
     if (typeof payload.model === 'string' && payload.model !== '')
-      entry.facts.model = payload.model;
+      state.facts.model = payload.model;
   } else if (record.type === 'event_msg' && payload.type === 'token_count') {
     const output = payload.info?.total_token_usage?.output_tokens;
     if (typeof output === 'number' && Number.isFinite(output) && output >= 0) {
-      entry.facts.tokens = output;
+      state.facts.tokens = output;
     }
   }
 }
 
-/** Parse the complete lines appended since `entry.offset`. */
-function readAppended(entry: CacheEntry, fd: number, size: number): void {
-  let pending = Buffer.alloc(0);
-  let position = entry.offset;
-  while (position < size) {
-    const chunk = Buffer.alloc(Math.min(CHUNK_BYTES, size - position));
-    const read = readSync(fd, chunk, 0, chunk.length, position);
-    if (read <= 0) break;
-    position += read;
-    const data =
-      pending.length > 0
-        ? Buffer.concat([pending, chunk.subarray(0, read)])
-        : chunk.subarray(0, read);
-    const lastNewline = data.lastIndexOf(NEWLINE);
-    if (lastNewline < 0) {
-      pending = data;
-      continue;
-    }
-    for (const line of data.subarray(0, lastNewline).toString('utf8').split('\n')) {
-      consume(entry, line);
-    }
-    entry.offset += lastNewline + 1;
-    pending = data.subarray(lastNewline + 1);
-  }
-}
+const tail = new JsonlTail<RolloutState>(() => ({ facts: {} }), consume);
 
 /** The model and output tokens recorded in a rollout, or none when unsupported. */
 export function readCodexRollout(rolloutPath?: string, identity?: SessionIdentity): RolloutFacts {
   if (!rolloutPath) return {};
-  let fd: number;
-  try {
-    fd = openSync(rolloutPath, 'r');
-  } catch {
-    return {};
-  }
-  try {
-    const st = fstatSync(fd);
-    const key = cacheKey(rolloutPath, identity);
-    let entry = cache.get(key);
-    // A different or replaced file, or one rewritten rather than appended to
-    // (it shrank, or changed without growing), is read from the start.
-    if (
-      !entry ||
-      entry.path !== rolloutPath ||
-      entry.ino !== st.ino ||
-      st.size < entry.offset ||
-      (st.size === entry.size && st.mtimeMs !== entry.mtimeMs)
-    ) {
-      entry = { path: rolloutPath, ino: st.ino, offset: 0, size: 0, mtimeMs: 0, facts: {} };
-    }
-    if (entry.size !== st.size || entry.mtimeMs !== st.mtimeMs) {
-      readAppended(entry, fd, st.size);
-      entry.size = st.size;
-      entry.mtimeMs = st.mtimeMs;
-    }
-    cache.delete(key);
-    cache.set(key, entry);
-    while (cache.size > MAX_CACHED_SESSIONS) cache.delete(cache.keys().next().value as string);
-    return entry.supported ? { ...entry.facts } : {};
-  } catch {
-    return {};
-  } finally {
-    closeSync(fd);
-  }
+  const state = tail.read(rolloutPath, cacheKey(rolloutPath, identity));
+  return state?.supported ? { ...state.facts } : {};
 }
