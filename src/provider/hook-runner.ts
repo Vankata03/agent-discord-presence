@@ -8,7 +8,8 @@
  * ledger and returns the next one, and the read, the translation, the ledger
  * write and the marker write all happen under the session's cross-process
  * lock, so concurrent hooks can neither lose an operation nor write markers
- * out of order.
+ * out of order. `runLedgerBatch` does the same for a stdin that carries
+ * several events, one after another.
  *
  * Hard rule: the hook path must NEVER throw or hang — it runs inside the
  * coding tool's hook execution. Everything is wrapped; errors are swallowed
@@ -162,18 +163,71 @@ export async function runLedgerHook(
     if (!pending) return;
 
     const root = runtime.root();
-    const store = runtime.createStore(root);
-    const result = store.withLock(pending.identity, () => {
-      const { translation, ledger } = pending.step(store.readLedger(pending.identity));
-      if (!translation) return null;
-      // An end removes the ledger with the marker.
-      if (translation.kind === 'update') store.writeLedger(pending.identity, ledger);
-      apply(store, translation, now);
-      return translation;
-    });
+    const result = applyLedgerStep(runtime.createStore(root), pending, now);
     // The daemon starts outside the lock so a slow spawn never holds up the
     // session's next hook; as above, an end never starts it.
     if (result?.kind === 'update') runtime.ensureDaemon(root);
+  } catch {
+    // A broken presence tool must never break the coding tool.
+  }
+}
+
+/** One event ready to run against its session's ledger. */
+export type PendingLedgerStep = NonNullable<ReturnType<LedgerTranslator>>;
+
+/** Read the ledger, translate, and write the ledger and marker, all under the session lock. */
+function applyLedgerStep(
+  store: LedgerHookStore,
+  pending: PendingLedgerStep,
+  now: number,
+): Translation {
+  return store.withLock(pending.identity, () => {
+    const { translation, ledger } = pending.step(store.readLedger(pending.identity));
+    if (!translation) return null;
+    // An end removes the ledger with the marker.
+    if (translation.kind === 'update') store.writeLedger(pending.identity, ledger);
+    apply(store, translation, now);
+    return translation;
+  });
+}
+
+/**
+ * Parse every event in one raw stdin, in order. A provider whose integration
+ * hands one process a batch of events (rather than one process per event)
+ * returns them all; an unparsable event is simply left out.
+ */
+export type LedgerBatchTranslator = (
+  raw: string,
+  now: number,
+  env: TranslateEnv,
+) => PendingLedgerStep[];
+
+/**
+ * Run a batch of ledger-backed events from one stdin, in order, each under
+ * its own session's lock exactly as `runLedgerHook` runs one. Every event is
+ * isolated: one that fails is dropped and the events after it still apply.
+ * The daemon is ensured once, after the batch, when any event updated a session.
+ */
+export async function runLedgerBatch(
+  translate: LedgerBatchTranslator,
+  runtime: HookRuntime<LedgerHookStore>,
+): Promise<void> {
+  try {
+    const now = runtime.now();
+    const pending = translate(runtime.readInput(), now, runtime.environment());
+    if (pending.length === 0) return;
+
+    const root = runtime.root();
+    const store = runtime.createStore(root);
+    let updated = false;
+    for (const step of pending) {
+      try {
+        if (applyLedgerStep(store, step, now)?.kind === 'update') updated = true;
+      } catch {
+        // One broken event never stops the events after it.
+      }
+    }
+    if (updated) runtime.ensureDaemon(root);
   } catch {
     // A broken presence tool must never break the coding tool.
   }

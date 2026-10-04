@@ -111,7 +111,9 @@ was still `queued` and `inFlight`). `seq` restarts for each plugin `instance`.
   global config directory. Otherwise `ready`, with the version. Nothing on the
   command line reveals whether `dispose` is awaited, so that boundary is a
   version; the floor also covers the `permission.asked` rename (1.0.224).
-- **For the provider ticket:**
+- **The provider** (`src/provider/opencode*.ts`, tested by
+  `test/opencode*.test.ts`, which replay these fixtures through the generated
+  plugin and the hook) follows the points below.
   - Install one self-contained plugin file in `<config>/plugins/`, with the
     config directory taken from `opencode debug paths`, never by editing
     `opencode.json`.

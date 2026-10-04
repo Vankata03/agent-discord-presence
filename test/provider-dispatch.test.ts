@@ -37,6 +37,14 @@ test('the gemini-cli route reaches the Gemini CLI runner', async () => {
   assert.deepEqual(calls, [{ provider: 'gemini-cli', args: ['before-tool'] }]);
 });
 
+test('the opencode route reaches the OpenCode runner', async () => {
+  const calls: Array<{ provider: string; args: string[] }> = [];
+  await dispatchHook(['opencode'], async (provider) => async (args) => {
+    calls.push({ provider, args });
+  });
+  assert.deepEqual(calls, [{ provider: 'opencode', args: [] }]);
+});
+
 test('legacy unqualified Claude Code events remain accepted', async () => {
   const calls: string[][] = [];
   const load: HookRunnerLoader = async (provider) => {

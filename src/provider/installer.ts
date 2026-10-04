@@ -174,10 +174,21 @@ export async function uninstallProviders(
 
 /** Every shipped provider adapter, in report order. */
 export async function defaultInstallers(): Promise<ProviderInstaller[]> {
-  const [{ ClaudeCodeInstaller }, { CodexInstaller }, { GeminiCliInstaller }] = await Promise.all([
+  const [
+    { ClaudeCodeInstaller },
+    { CodexInstaller },
+    { GeminiCliInstaller },
+    { OpenCodeInstaller },
+  ] = await Promise.all([
     import('./claude-code-install'),
     import('./codex-install'),
     import('./gemini-cli-install'),
+    import('./opencode-install'),
   ]);
-  return [new ClaudeCodeInstaller(), new CodexInstaller(), new GeminiCliInstaller()];
+  return [
+    new ClaudeCodeInstaller(),
+    new CodexInstaller(),
+    new GeminiCliInstaller(),
+    new OpenCodeInstaller(),
+  ];
 }

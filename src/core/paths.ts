@@ -36,6 +36,15 @@ export function geminiDir(): string {
   return path.join(process.env.GEMINI_CLI_HOME || os.homedir(), '.gemini');
 }
 
+/**
+ * OpenCode's default global config directory: `$XDG_CONFIG_HOME/opencode`,
+ * else `~/.config/opencode` (on Windows too). The running tool names its own
+ * through `opencode debug paths`; this is where to look without it.
+ */
+export function openCodeConfigDir(): string {
+  return path.join(process.env.XDG_CONFIG_HOME || path.join(os.homedir(), '.config'), 'opencode');
+}
+
 /** Claude Code's settings file we add hooks to. */
 export function settingsPath(): string {
   return path.join(claudeDir(), 'settings.json');

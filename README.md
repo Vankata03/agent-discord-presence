@@ -20,7 +20,7 @@ and it stays private unless you choose to share more.
 | Claude Code | ✅ supported |
 | Codex       | ✅ supported |
 | Gemini CLI  | ✅ supported |
-| OpenCode    | 🔜 planned   |
+| OpenCode    | ✅ supported |
 
 > Built on a provider model — adding a tool only changes how events are read, not
 > the rest. PRs welcome.
@@ -40,7 +40,8 @@ vdp install
 `vdp install` sets up every supported tool it finds. **Codex** runs new hooks only
 after you approve them, so open Codex once and review them with `/hooks`.
 **Gemini CLI** runs hooks only in folders you trust, so your presence stays off in
-untrusted folders.
+untrusted folders. **OpenCode** gets one global plugin (OpenCode 1.15.11 or newer)
+and picks it up the next time it starts.
 
 Open your AI coding tool with the Discord **desktop** app running — your status
 shows up on its own. That's the whole setup.
@@ -91,7 +92,9 @@ name; built-in themes do not reveal it.
 
 `vdp install` only adds its own hook entries: your other settings keep their
 exact formatting, and the original file is backed up (`settings.json.<time>.bak`)
-before it's changed. If a tool's settings can't be safely edited, that tool is
+before it's changed. For OpenCode it adds a single file of its own,
+`plugins/vibecoder-discord-presence.js` in OpenCode's global config folder, and
+never touches `opencode.json`. If a tool's settings can't be safely edited, that tool is
 skipped with an error and the command exits non-zero. `--purge` only deletes
 your data once every hook has been removed.
 
@@ -102,7 +105,8 @@ paths, or filenames. Anything more is opt-in, and there's no telemetry.
 
 ## How it works
 
-A small hook fires on each event and writes a marker file. A lightweight
+A small hook fires on each event (for OpenCode, a plugin hands it the events in
+order) and writes a marker file. A lightweight
 background process reads it, updates Discord, and exits once you're idle — no
 always-on daemon, no manual start/stop.
 
