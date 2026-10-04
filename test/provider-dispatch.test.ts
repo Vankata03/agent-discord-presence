@@ -29,6 +29,14 @@ test('the codex route reaches the Codex runner', async () => {
   assert.deepEqual(calls, [{ provider: 'codex', args: ['session-start'] }]);
 });
 
+test('the gemini-cli route reaches the Gemini CLI runner', async () => {
+  const calls: Array<{ provider: string; args: string[] }> = [];
+  await dispatchHook(['gemini-cli', 'before-tool'], async (provider) => async (args) => {
+    calls.push({ provider, args });
+  });
+  assert.deepEqual(calls, [{ provider: 'gemini-cli', args: ['before-tool'] }]);
+});
+
 test('legacy unqualified Claude Code events remain accepted', async () => {
   const calls: string[][] = [];
   const load: HookRunnerLoader = async (provider) => {
