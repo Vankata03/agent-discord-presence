@@ -24,8 +24,10 @@ import { createReconcileTick } from './reconcile';
 /** How often we reconcile markers -> Discord. */
 const TICK_MS = 15 * 1000;
 
+/** Wait between ticks without blocking the event loop. */
 const sleep = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));
 
+/** Run the daemon until it goes idle, unless another daemon already holds the lock. */
 export async function startDaemon(_args: string[] = []): Promise<void> {
   const root = presenceDir();
   const daemon = new DaemonState(root);

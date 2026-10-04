@@ -12,14 +12,17 @@ import type { SessionIdentity } from '../../src/types';
 
 const [root, barrier, toolUseId, mode] = process.argv.slice(2) as [string, string, string, string];
 const pause = new Int32Array(new SharedArrayBuffer(4));
+/** Block this worker without spinning. */
 const sleep = (ms: number) => Atomics.wait(pause, 0, 0, ms);
 
 class SlowStore extends SessionStore {
+  /** Read, then hold the window open so an unserialized writer would race. */
   override readLedger(identity: SessionIdentity): unknown {
     const ledger = super.readLedger(identity);
     sleep(100);
     return ledger;
   }
+  /** Bypass the lock in the `unlocked` control run. */
   override withLock<T>(identity: SessionIdentity, fn: () => T): T {
     return mode === 'unlocked' ? fn() : super.withLock(identity, fn);
   }

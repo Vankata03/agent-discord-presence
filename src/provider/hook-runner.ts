@@ -21,6 +21,7 @@ import { SessionStore } from '../core/session-store';
 import type { SessionIdentity, SessionMarkerPatch } from '../types';
 import type { TranslateEnv, Translation } from './types';
 
+/** The hook payload; an unreadable stdin is empty, so fallbacks decide. */
 function readStdin(): string {
   try {
     return readFileSync(0, 'utf8');
@@ -103,6 +104,7 @@ export type RawTranslator = (
   env: TranslateEnv,
 ) => Translation;
 
+/** Run one stateless provider hook: translate stdin, apply it, ensure the daemon. */
 export async function runProviderHook(
   args: string[],
   translate: RawTranslator,
@@ -122,6 +124,7 @@ export async function runProviderHook(
   }
 }
 
+/** Write one translation to the store: record an update, or end the session. */
 function apply(store: HookStore, result: NonNullable<Translation>, now: number): void {
   if (result.kind === 'end') store.end(result.identity);
   else store.record(result.identity, result.patch, now, result.activityChanged);
@@ -146,6 +149,7 @@ export type LedgerTranslator = (
   env: TranslateEnv,
 ) => { identity: SessionIdentity; step: (ledger: unknown) => LedgerStep } | null;
 
+/** Run one ledger-backed provider hook, with all session I/O under the session lock. */
 export async function runLedgerHook(
   args: string[],
   translate: LedgerTranslator,

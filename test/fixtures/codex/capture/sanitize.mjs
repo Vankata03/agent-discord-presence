@@ -3,6 +3,7 @@
 import { readFileSync, writeFileSync } from 'node:fs';
 const [, , src, dst, kind] = process.argv;
 const P = process.env.P;
+/** Replace capture-machine paths with neutral `/home/me/...` ones. */
 const redact = (s) =>
   s
     .split(`${P}/homeA`)
@@ -13,6 +14,7 @@ const redact = (s) =>
     .join('/home/me/my-app')
     .split(P)
     .join('/home/me');
+/** Redact every string and trim long ones, except `*_path` fields. */
 const trim = (v, key) => {
   if (typeof v === 'string')
     return v.length > 160 && !/_path$/.test(key ?? '') ? '[trimmed]' : redact(v);

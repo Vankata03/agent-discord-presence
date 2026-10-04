@@ -46,6 +46,7 @@ const DEFAULT_TIMEOUT_MS = 1500;
 const DEFAULT_STALE_AFTER_MS = 2000;
 
 const pause = new Int32Array(new SharedArrayBuffer(4));
+/** Block this thread for `ms` without spinning (hooks are synchronous). */
 function sleep(ms: number): void {
   Atomics.wait(pause, 0, 0, ms);
 }
@@ -126,6 +127,7 @@ function takeOver(path: string, abandonedToken: string | undefined): void {
   rmSync(aside, { force: true });
 }
 
+/** Remove the lock only while it still holds our token. */
 function release(path: string, token: string): void {
   const held = readJson<LockOwner>(path);
   if (held?.token === token) rmSync(path, { force: true });

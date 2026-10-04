@@ -7,6 +7,7 @@ const exec = (id, cmd, extra = {}) => ({
   name: 'exec_command',
   arguments: JSON.stringify({ cmd, yield_time_ms: 5000, ...extra }),
 });
+/** A `collaboration` namespace `spawn_agent` call. */
 const spawn = (id, task) => ({
   type: 'function_call',
   id: `fc_${id}`,
@@ -19,6 +20,7 @@ const spawn = (id, task) => ({
     fork_turns: 'none',
   }),
 });
+/** An `apply_patch` custom tool call that adds one file. */
 const patch = (id, file) => ({
   type: 'custom_tool_call',
   id: `ctc_${id}`,

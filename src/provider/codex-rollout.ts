@@ -48,6 +48,7 @@ const NEWLINE = 0x0a;
 
 const cache = new Map<string, CacheEntry>();
 
+/** Cache per session identity, so facts never carry across sessions. */
 function cacheKey(path: string, identity?: SessionIdentity): string {
   return JSON.stringify(identity ? [identity.provider, identity.sessionId] : [path]);
 }
@@ -62,6 +63,7 @@ interface RolloutRecord {
   };
 }
 
+/** Whether a rollout's first record is the supported `session_meta` header. */
 function isSessionMeta(record: RolloutRecord): boolean {
   return record.type === 'session_meta' && typeof record.payload?.cli_version === 'string';
 }

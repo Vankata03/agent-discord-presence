@@ -231,6 +231,7 @@ export class SessionStore {
   }
 }
 
+/** Throw unless the provider is known and the session id is safe to hash into a path. */
 function validateIdentity(identity: SessionIdentity): void {
   if (!PROVIDERS.has(identity.provider)) {
     throw new Error(`invalid provider: ${JSON.stringify(identity.provider)}`);
@@ -241,6 +242,7 @@ function validateIdentity(identity: SessionIdentity): void {
   }
 }
 
+/** `validateIdentity` as a predicate, for filtering markers. */
 function isValidIdentity(identity: SessionIdentity): boolean {
   try {
     validateIdentity(identity);
@@ -250,12 +252,14 @@ function isValidIdentity(identity: SessionIdentity): boolean {
   }
 }
 
+/** Stable order of identities: the final tie-breaker when choosing the current session. */
 function compareIdentity(a: SessionIdentity, b: SessionIdentity): number {
   const aKey = `${a.provider}\0${a.sessionId}`;
   const bKey = `${b.provider}\0${b.sessionId}`;
   return aKey < bKey ? -1 : aKey > bKey ? 1 : 0;
 }
 
+/** A marker's file name: the SHA-256 of the raw session id, never the id itself. */
 function markerFileName(sessionId: string): string {
   return `${createHash('sha256').update(sessionId).digest('hex')}.json`;
 }

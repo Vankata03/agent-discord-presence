@@ -97,6 +97,7 @@ export const IDLE: Activity = { state: 'idle', activity: 'Idle' };
 const STARTING: Activity = { state: 'idle', activity: 'Starting a session' };
 const WAITING: Activity = { state: 'waiting', activity: 'Waiting for permission' };
 
+/** A ledger with nothing running, in the given root phase. */
 export function emptyLedger(phase: CodexLedger['phase'] = 'idle'): CodexLedger {
   return { version: 1, seq: 0, phase, tools: [], agents: [], permissions: [] };
 }
@@ -137,14 +138,18 @@ export function parseLedger(value: unknown): CodexLedger {
   };
 }
 
+/** Entries from the root (`undefined`) or from one subagent. */
 const inScope = (agent: string | undefined) => (entry: { agent?: string }) => entry.agent === agent;
+/** Entries from anywhere except the root (`undefined`) or one subagent. */
 const outOfScope = (agent: string | undefined) => (entry: { agent?: string }) =>
   entry.agent !== agent;
 
+/** The entry with the highest event counter, if any. */
 function newest<T extends { seq: number }>(entries: T[]): T | undefined {
   return entries.reduce<T | undefined>((a, b) => (a && a.seq > b.seq ? a : b), undefined);
 }
 
+/** Keep only the newest MAX_ENTRIES entries. */
 const capped = <T>(entries: T[]): T[] => entries.slice(-MAX_ENTRIES);
 
 /** Apply one event and return the next ledger. */

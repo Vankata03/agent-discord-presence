@@ -9,6 +9,7 @@ import { pathToFileURL } from 'node:url';
 const { default: script } = await import(pathToFileURL(process.argv[2]).href);
 const log = process.argv[3];
 let n = 0;
+/** The text of a message item, including a subagent's encrypted task payload. */
 const text = (m) =>
   Array.isArray(m.content)
     ? m.content.map((c) => c.text ?? c.encrypted_content ?? '').join('')
@@ -62,6 +63,7 @@ createServer((req, res) => {
     );
     const id = 'resp_' + n;
     res.writeHead(200, { 'content-type': 'text/event-stream' });
+    /** Write one server-sent event. */
     const send = (e) => res.write(`event: ${e.type}\ndata: ${JSON.stringify(e)}\n\n`);
     send({ type: 'response.created', response: { id } });
     items.forEach((item, i) => send({ type: 'response.output_item.done', output_index: i, item }));

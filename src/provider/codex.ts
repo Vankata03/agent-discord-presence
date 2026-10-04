@@ -80,6 +80,7 @@ const AGENT_TOOLS = new Set(['spawn_agent', 'Agent', 'Task']);
 /** Codex prefixes namespaced tools with the namespace, e.g. `collaborationspawn_agent`. */
 const AGENT_NAMESPACE = 'collaboration';
 
+/** The value when it is a non-empty string; payload fields are untrusted. */
 function nonEmpty(value: unknown): string | undefined {
   return typeof value === 'string' && value !== '' ? value : undefined;
 }
@@ -92,6 +93,7 @@ function explicitFile(input: unknown): string | undefined {
   return typeof path === 'string' && path !== '' ? basename(path) : undefined;
 }
 
+/** What a tool call is visibly doing, by tool family, with an open-ended fallback. */
 function toolActivity(payload: CodexHookPayload): Activity {
   const tool = nonEmpty(payload.tool_name) ?? '';
   if (EDIT_TOOLS.has(tool)) {
@@ -221,6 +223,7 @@ export function translate(
 
 const DEFAULT_HOOK_RUNTIME = defaultHookRuntime(() => ({ cwd: process.cwd() }));
 
+/** Hook entry for `vdp hook codex <event>`: never throws, never prints. */
 export async function runHook(
   args: string[] = [],
   runtime: HookRuntime<LedgerHookStore> = DEFAULT_HOOK_RUNTIME,
