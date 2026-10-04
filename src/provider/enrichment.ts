@@ -102,7 +102,14 @@ function readRepository(cwd: string): RepositoryState | null {
     const output = execFileSync(
       'git',
       ['-C', cwd, 'rev-parse', '--show-toplevel', '--abbrev-ref', 'HEAD'],
-      { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'], env: gitEnvironment() },
+      {
+        encoding: 'utf8',
+        stdio: ['ignore', 'pipe', 'ignore'],
+        env: gitEnvironment(),
+        // The daemon is detached with no console, so without this Windows opens
+        // (and immediately closes) a console window for every git lookup.
+        windowsHide: true,
+      },
     );
     const [root, rawBranch] = output.trim().split(/\r?\n/);
     if (!root) return null;
