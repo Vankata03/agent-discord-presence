@@ -43,29 +43,43 @@ export function findExecutable(
 }
 
 /**
- * Run `<executable> --version` and return the first semver-looking token of
- * its output, or undefined when it fails, times out or prints nothing usable.
+ * Run `<executable> <args>` and return its stdout, or undefined when it fails,
+ * exits non-zero or times out. Arguments are passed literally; they must not
+ * need shell quoting.
  */
-export function probeVersion(executable: string, timeoutMs = 5000): string | undefined {
+export function probeOutput(
+  executable: string,
+  args: string[],
+  timeoutMs = 5000,
+): string | undefined {
   // Windows can only start .cmd/.bat shims through a shell; quote the path and
   // pass a single command string so no argument is ever shell-interpolated.
   const viaShell = process.platform === 'win32' && /\.(cmd|bat)$/i.test(executable);
   try {
     const result = viaShell
-      ? spawnSync(`"${executable}" --version`, {
+      ? spawnSync(`"${executable}" ${args.join(' ')}`, {
           shell: true,
           encoding: 'utf8',
           timeout: timeoutMs,
           windowsHide: true,
         })
-      : spawnSync(executable, ['--version'], {
+      : spawnSync(executable, args, {
           encoding: 'utf8',
           timeout: timeoutMs,
           windowsHide: true,
         });
     if (result.status !== 0) return undefined;
-    return /\d+\.\d+\.\d+[^\s)]*/.exec(`${result.stdout ?? ''}`)?.[0];
+    return `${result.stdout ?? ''}`;
   } catch {
     return undefined;
   }
+}
+
+/**
+ * Run `<executable> --version` and return the first semver-looking token of
+ * its output, or undefined when it fails, times out or prints nothing usable.
+ */
+export function probeVersion(executable: string, timeoutMs = 5000): string | undefined {
+  const output = probeOutput(executable, ['--version'], timeoutMs);
+  return output === undefined ? undefined : /\d+\.\d+\.\d+[^\s)]*/.exec(output)?.[0];
 }
