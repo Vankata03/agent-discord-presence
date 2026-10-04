@@ -112,6 +112,18 @@ test('a permission prompt notifies between its BeforeTool and AfterTool', () => 
   assert.equal((notification.details as { type?: unknown }).type, 'exec');
 });
 
+test('a cancelled permission prompt sends neither AfterTool nor AfterAgent', () => {
+  // Captured with only the seven installed events logged.
+  assert.deepEqual(capture('hooks-permission-cancelled.jsonl').map(label), [
+    'SessionStart:startup',
+    'BeforeAgent',
+    'BeforeTool:run_shell_command',
+    'Notification:ToolPermission',
+    'SessionEnd:exit',
+    'SessionEnd:exit',
+  ]);
+});
+
 test('/clear ends the session and starts a new session id; exit can repeat SessionEnd', () => {
   const records = installed('hooks-permission.jsonl').slice(-5);
   assert.deepEqual(records.map(label), [

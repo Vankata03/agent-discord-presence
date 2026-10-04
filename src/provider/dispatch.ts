@@ -30,6 +30,8 @@ async function loadHookRunner(provider: ProviderKey): Promise<HookRunner | null>
       return (await import('./claude-code')).runHook;
     case 'codex':
       return (await import('./codex')).runHook;
+    case 'gemini-cli':
+      return (await import('./gemini-cli')).runHook;
     default:
       return null;
   }

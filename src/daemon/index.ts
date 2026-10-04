@@ -16,8 +16,7 @@ import { presenceDir } from '../core/paths';
 import { SessionStore } from '../core/session-store';
 import { UserConfigFile } from '../core/user-config';
 import { createEnrichmentDispatcher, GitBranchResolver } from '../provider/enrichment';
-import { readCodexRollout } from '../provider/codex-rollout';
-import { readTranscriptMeta } from '../provider/transcript';
+import { ENRICHMENT_READERS } from '../provider/enrichment-readers';
 import { DiscordPresence } from './discord';
 import { createReconcileTick } from './reconcile';
 
@@ -40,10 +39,7 @@ export async function startDaemon(_args: string[] = []): Promise<void> {
   const discord = new DiscordPresence(userConfig.load().clientId);
   const branchResolver = new GitBranchResolver();
   const enrich = createEnrichmentDispatcher({
-    readers: {
-      'claude-code': (reference, identity) => readTranscriptMeta(reference, identity),
-      codex: (reference, identity) => readCodexRollout(reference, identity),
-    },
+    readers: ENRICHMENT_READERS,
     resolveBranch: (cwd) => branchResolver.resolve(cwd),
   });
   const tick = createReconcileTick({

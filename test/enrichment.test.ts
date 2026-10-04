@@ -3,13 +3,15 @@ import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
 import { mkdirSync, mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import {
   createEnrichmentDispatcher,
   GitBranchResolver,
   type Enrichment,
   type ProviderEnrichmentReader,
 } from '../src/provider/enrichment';
+import { ENRICHMENT_READERS } from '../src/provider/enrichment-readers';
 import type { AggregatedState } from '../src/types';
 
 function state(overrides: Partial<AggregatedState> = {}): AggregatedState {
@@ -187,4 +189,25 @@ test('Git branch resolution ignores inherited repository-location variables', ()
     else process.env.GIT_WORK_TREE = previousWorkTree;
     rmSync(root, { recursive: true, force: true });
   }
+});
+
+test('the shipped readers enrich a Gemini CLI session from its verified transcript only', () => {
+  const fixtures = join(dirname(fileURLToPath(import.meta.url)), 'fixtures/gemini-cli/0.62.0');
+  const enrich = createEnrichmentDispatcher({
+    readers: ENRICHMENT_READERS,
+    resolveBranch: () => undefined,
+  });
+  const gemini = (sessionId: string, enrichmentRef?: string) =>
+    enrich(state({ provider: 'gemini-cli', sessionId, cwd: undefined, enrichmentRef }));
+
+  assert.deepEqual(gemini('ffd08608', join(fixtures, 'transcript.jsonl')), {
+    model: 'gemini-3.1-pro-preview',
+    tokens: 532,
+  });
+  // A restatement without tokens or model, a missing file and an unknown
+  // format yield nothing rather than zero.
+  assert.deepEqual(gemini('stub', join(fixtures, 'transcript-resume-stub.jsonl')), {});
+  assert.deepEqual(gemini('gone', join(fixtures, 'missing.jsonl')), {});
+  assert.deepEqual(gemini('other-format', join(fixtures, 'help.txt')), {});
+  assert.deepEqual(gemini('no-reference'), {});
 });

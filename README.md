@@ -19,7 +19,7 @@ and it stays private unless you choose to share more.
 | ----------- | ------------ |
 | Claude Code | ✅ supported |
 | Codex       | ✅ supported |
-| Gemini CLI  | 🔜 planned   |
+| Gemini CLI  | ✅ supported |
 | OpenCode    | 🔜 planned   |
 
 > Built on a provider model — adding a tool only changes how events are read, not
@@ -39,6 +39,8 @@ vdp install
 
 `vdp install` sets up every supported tool it finds. **Codex** runs new hooks only
 after you approve them, so open Codex once and review them with `/hooks`.
+**Gemini CLI** runs hooks only in folders you trust, so your presence stays off in
+untrusted folders.
 
 Open your AI coding tool with the Discord **desktop** app running — your status
 shows up on its own. That's the whole setup.
