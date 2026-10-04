@@ -16,6 +16,7 @@ import { presenceDir } from '../core/paths';
 import { SessionStore } from '../core/session-store';
 import { UserConfigFile } from '../core/user-config';
 import { createEnrichmentDispatcher, GitBranchResolver } from '../provider/enrichment';
+import { readCodexRollout } from '../provider/codex-rollout';
 import { readTranscriptMeta } from '../provider/transcript';
 import { DiscordPresence } from './discord';
 import { createReconcileTick } from './reconcile';
@@ -39,9 +40,7 @@ export async function startDaemon(_args: string[] = []): Promise<void> {
   const enrich = createEnrichmentDispatcher({
     readers: {
       'claude-code': (reference, identity) => readTranscriptMeta(reference, identity),
-      // Rollout enrichment lands with the activity ledger; until then Codex
-      // reports its model on every hook and the branch still resolves from cwd.
-      codex: () => ({}),
+      codex: (reference, identity) => readCodexRollout(reference, identity),
     },
     resolveBranch: (cwd) => branchResolver.resolve(cwd),
   });
