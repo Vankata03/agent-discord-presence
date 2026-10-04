@@ -1,0 +1,9 @@
+home       /home/me
+data       /home/me/.local/share/opencode
+bin        /home/me/.cache/opencode/bin
+log        /home/me/.local/share/opencode/log
+repos      /home/me/.local/share/opencode/repos
+cache      /home/me/.cache/opencode
+config     /home/me/.config/opencode
+state      /home/me/.local/state/opencode
+tmp        /tmp/opencode

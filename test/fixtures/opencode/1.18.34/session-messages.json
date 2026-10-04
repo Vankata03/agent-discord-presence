@@ -1,0 +1,98 @@
+[
+  {
+    "id": "msg_106792209001DzDTbShHoAVSbH",
+    "sessionID": "ses_ef986de5cffernPG5zeiXoUrah",
+    "role": "user",
+    "time": {
+      "created": 1791109964297
+    },
+    "summary": {
+      "diffs": []
+    },
+    "agent": "build",
+    "model": {
+      "providerID": "mock",
+      "modelID": "mock-large"
+    }
+  },
+  {
+    "id": "msg_1067924fe0015nXriF2Aynf0JX",
+    "sessionID": "ses_ef986de5cffernPG5zeiXoUrah",
+    "role": "assistant",
+    "time": {
+      "created": 1791109965054,
+      "completed": 1791109966850
+    },
+    "error": {
+      "name": "MessageAbortedError",
+      "data": {
+        "message": "Aborted"
+      }
+    },
+    "parentID": "msg_106792209001DzDTbShHoAVSbH",
+    "modelID": "mock-large",
+    "providerID": "mock",
+    "mode": "build",
+    "agent": "build",
+    "path": {
+      "cwd": "/home/me/my-app",
+      "root": "/home/me/my-app"
+    },
+    "cost": 0,
+    "tokens": {
+      "input": 0,
+      "output": 0,
+      "reasoning": 0,
+      "cache": {
+        "read": 0,
+        "write": 0
+      }
+    }
+  },
+  {
+    "id": "msg_1067a0d77001EI9YjfknhgWVfN",
+    "sessionID": "ses_ef986de5cffernPG5zeiXoUrah",
+    "role": "user",
+    "time": {
+      "created": 1791110024567
+    },
+    "summary": {
+      "diffs": []
+    },
+    "agent": "build",
+    "model": {
+      "providerID": "mock",
+      "modelID": "mock-large"
+    }
+  },
+  {
+    "id": "msg_1067a1045001SLc7yZ59sk23qk",
+    "sessionID": "ses_ef986de5cffernPG5zeiXoUrah",
+    "role": "assistant",
+    "time": {
+      "created": 1791110025285,
+      "completed": 1791110027345
+    },
+    "parentID": "msg_1067a0d77001EI9YjfknhgWVfN",
+    "modelID": "mock-large",
+    "providerID": "mock",
+    "mode": "build",
+    "agent": "build",
+    "path": {
+      "cwd": "/home/me/my-app",
+      "root": "/home/me/my-app"
+    },
+    "cost": 0.000604,
+    "tokens": {
+      "total": 352,
+      "input": 100,
+      "output": 252,
+      "reasoning": 0,
+      "cache": {
+        "read": 0,
+        "write": 0
+      }
+    },
+    "finish": "stop"
+  }
+]
