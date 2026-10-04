@@ -3,12 +3,13 @@
  * the parent's barrier so every worker updates the same session at once, and
  * widens the read-to-write window so any unserialized update is lost.
  *
- * usage: node --import tsx ledger-hook-worker.ts <codex|gemini-cli> <root> <barrier> <worker-id> <locked|unlocked>
+ * usage: node --import tsx ledger-hook-worker.ts <codex|gemini-cli|opencode> <root> <barrier> <worker-id> <locked|unlocked>
  */
 import { existsSync, writeFileSync } from 'node:fs';
 import { SessionStore } from '../../src/core/session-store';
 import { runHook as runCodexHook } from '../../src/provider/codex';
 import { runHook as runGeminiHook } from '../../src/provider/gemini-cli';
+import { runHook as runOpenCodeHook } from '../../src/provider/opencode';
 import type { HookRuntime, LedgerHookStore } from '../../src/provider/hook-runner';
 import type { SessionIdentity } from '../../src/types';
 
@@ -40,7 +41,18 @@ class SlowStore extends SessionStore {
 const payload =
   provider === 'codex'
     ? { session_id: 'shared', cwd: root, tool_name: 'Bash', tool_use_id: workerId }
-    : { session_id: 'shared', cwd: root, tool_name: 'run_shell_command' };
+    : provider === 'opencode'
+      ? {
+          v: 1,
+          type: 'message.part.updated',
+          root: 'shared',
+          session: 'shared',
+          cwd: root,
+          call: workerId,
+          tool: 'bash',
+          state: 'running',
+        }
+      : { session_id: 'shared', cwd: root, tool_name: 'run_shell_command' };
 const event = provider === 'codex' ? 'pre-tool-use' : 'before-tool';
 
 const runtime: HookRuntime<LedgerHookStore> = {
@@ -56,4 +68,5 @@ writeFileSync(`${barrier}.${workerId}.ready`, '');
 while (!existsSync(barrier)) sleep(1);
 
 if (provider === 'codex') await runCodexHook([event], runtime);
+else if (provider === 'opencode') await runOpenCodeHook([], runtime);
 else await runGeminiHook([event], { ...runtime, writeOutput: () => {} });
