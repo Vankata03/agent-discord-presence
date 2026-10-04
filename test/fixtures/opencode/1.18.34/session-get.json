@@ -1,0 +1,212 @@
+{
+  "ses_ef986de5cffernPG5zeiXoUrah": {
+    "status": 200,
+    "parentID": null,
+    "data": {
+      "id": "ses_ef986de5cffernPG5zeiXoUrah",
+      "slug": "glowing-comet",
+      "projectID": "fd8fa878e383bd56cf7c27c07f53d76d1ed25739",
+      "directory": "/home/me/my-app",
+      "path": "",
+      "summary": {
+        "additions": 0,
+        "deletions": 0,
+        "files": 0
+      },
+      "cost": 0.000604,
+      "tokens": {
+        "input": 100,
+        "output": 252,
+        "reasoning": 0,
+        "cache": {
+          "read": 0,
+          "write": 0
+        }
+      },
+      "title": "Probe title",
+      "agent": "build",
+      "model": {
+        "id": "mock-large",
+        "providerID": "mock",
+        "variant": "default"
+      },
+      "version": "1.18.34",
+      "time": {
+        "created": 1791109964195,
+        "updated": 1791110027354
+      }
+    }
+  },
+  "ses_ef986d75cffeQs277PBgJo5MGB": {
+    "status": 200,
+    "parentID": "ses_ef986de5cffernPG5zeiXoUrah",
+    "data": {
+      "id": "ses_ef986d75cffeQs277PBgJo5MGB",
+      "slug": "tidy-rocket",
+      "projectID": "fd8fa878e383bd56cf7c27c07f53d76d1ed25739",
+      "directory": "/home/me/my-app",
+      "path": "",
+      "parentID": "ses_ef986de5cffernPG5zeiXoUrah",
+      "summary": {
+        "additions": 0,
+        "deletions": 0,
+        "files": 0
+      },
+      "cost": 0.00059,
+      "tokens": {
+        "input": 100,
+        "output": 245,
+        "reasoning": 0,
+        "cache": {
+          "read": 0,
+          "write": 0
+        }
+      },
+      "title": "Probe child (@general subagent)",
+      "agent": "build",
+      "model": {
+        "id": "mock-large",
+        "providerID": "mock",
+        "variant": "default"
+      },
+      "version": "1.18.34",
+      "time": {
+        "created": 1791109965988,
+        "updated": 1791110005307
+      },
+      "permission": [
+        {
+          "permission": "task",
+          "pattern": "*",
+          "action": "deny"
+        }
+      ]
+    }
+  },
+  "ses_0vdpcycle0000000000000000A": {
+    "status": 200,
+    "parentID": "ses_0vdpcycle0000000000000000B",
+    "data": {
+      "id": "ses_0vdpcycle0000000000000000A",
+      "slug": "cycle-a",
+      "projectID": "fd8fa878e383bd56cf7c27c07f53d76d1ed25739",
+      "directory": "/home/me/my-app",
+      "path": "",
+      "parentID": "ses_0vdpcycle0000000000000000B",
+      "summary": {
+        "additions": 0,
+        "deletions": 0,
+        "files": 0
+      },
+      "cost": 0,
+      "tokens": {
+        "input": 0,
+        "output": 0,
+        "reasoning": 0,
+        "cache": {
+          "read": 0,
+          "write": 0
+        }
+      },
+      "title": "cycle-a",
+      "agent": "build",
+      "model": {
+        "id": "mock-large",
+        "providerID": "mock",
+        "variant": "default"
+      },
+      "version": "1.18.34",
+      "time": {
+        "created": 1791109964195,
+        "updated": 1791110027354
+      }
+    }
+  },
+  "ses_0vdpcycle0000000000000000B": {
+    "status": 200,
+    "parentID": "ses_0vdpcycle0000000000000000A",
+    "data": {
+      "id": "ses_0vdpcycle0000000000000000B",
+      "slug": "cycle-b",
+      "projectID": "fd8fa878e383bd56cf7c27c07f53d76d1ed25739",
+      "directory": "/home/me/my-app",
+      "path": "",
+      "parentID": "ses_0vdpcycle0000000000000000A",
+      "summary": {
+        "additions": 0,
+        "deletions": 0,
+        "files": 0
+      },
+      "cost": 0,
+      "tokens": {
+        "input": 0,
+        "output": 0,
+        "reasoning": 0,
+        "cache": {
+          "read": 0,
+          "write": 0
+        }
+      },
+      "title": "cycle-b",
+      "agent": "build",
+      "model": {
+        "id": "mock-large",
+        "providerID": "mock",
+        "variant": "default"
+      },
+      "version": "1.18.34",
+      "time": {
+        "created": 1791109964195,
+        "updated": 1791110027354
+      }
+    }
+  },
+  "ses_0vdpdangling00000000000000C": {
+    "status": 200,
+    "parentID": "ses_0vdpmissing000000000000000D",
+    "data": {
+      "id": "ses_0vdpdangling00000000000000C",
+      "slug": "dangling-c",
+      "projectID": "fd8fa878e383bd56cf7c27c07f53d76d1ed25739",
+      "directory": "/home/me/my-app",
+      "path": "",
+      "parentID": "ses_0vdpmissing000000000000000D",
+      "summary": {
+        "additions": 0,
+        "deletions": 0,
+        "files": 0
+      },
+      "cost": 0,
+      "tokens": {
+        "input": 0,
+        "output": 0,
+        "reasoning": 0,
+        "cache": {
+          "read": 0,
+          "write": 0
+        }
+      },
+      "title": "dangling-c",
+      "agent": "build",
+      "model": {
+        "id": "mock-large",
+        "providerID": "mock",
+        "variant": "default"
+      },
+      "version": "1.18.34",
+      "time": {
+        "created": 1791109964195,
+        "updated": 1791110027354
+      }
+    }
+  },
+  "ses_0vdpmissing000000000000000D": {
+    "status": 404,
+    "error": {
+      "name": "NotFoundError",
+      "data": {
+        "message": "Session not found: ses_0vdpmissing000000000000000D"
+      }
+    }
+  }
+}
