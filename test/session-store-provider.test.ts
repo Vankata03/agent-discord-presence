@@ -219,3 +219,40 @@ test('child activity updates one root marker without increasing the root-session
   assert.equal(snapshot?.sessionId, 'root-session');
   assert.equal(snapshot?.activity, 'Running a child tool');
 });
+
+test('a session ledger lives beside its marker and is removed with it', () => {
+  const store = new SessionStore(root);
+  const identity = { provider: 'codex', sessionId: 'thread-1' } as const;
+  store.withLock(identity, () => {
+    store.writeLedger(identity, { version: 1, tools: ['a'] });
+    store.record(identity, { project: 'p' }, NOW, true);
+  });
+  assert.deepEqual(store.readLedger(identity), { version: 1, tools: ['a'] });
+  const files = readdirSync(join(root, 'sessions', 'codex')).sort();
+  assert.equal(files.length, 2);
+  assert.match(files[0]!, /^[a-f0-9]{64}\.json$/);
+  assert.match(files[1]!, /^[a-f0-9]{64}\.ledger\.json$/);
+  assert.equal(store.snapshot(NOW)?.sessionCount, 1, 'a ledger is never read as a marker');
+
+  store.writeLedger(identity, null);
+  assert.equal(store.readLedger(identity), null);
+  store.writeLedger(identity, { version: 1 });
+  store.end(identity);
+  assert.equal(store.readLedger(identity), null);
+  assert.deepEqual(readdirSync(join(root, 'sessions', 'codex')), []);
+});
+
+test('pruning an abandoned session also removes its ledger', () => {
+  const store = new SessionStore(root, { staleAfterMs: 10, pruneAfterMs: 100 });
+  const identity = { provider: 'codex', sessionId: 'abandoned' } as const;
+  store.record(identity, {}, NOW, true);
+  store.writeLedger(identity, { version: 1 });
+  assert.equal(store.snapshot(NOW + 101), null);
+  assert.equal(store.readLedger(identity), null);
+});
+
+test('the session lock rejects invalid identities before touching disk', () => {
+  const store = new SessionStore(root);
+  assert.throws(() => store.withLock({ provider: 'codex', sessionId: '../x' }, () => 1));
+  assert.throws(() => store.withLock({ provider: 'nope' as 'codex', sessionId: 'x' }, () => 1));
+});

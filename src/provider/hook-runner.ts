@@ -3,6 +3,13 @@
  * stdin, translate it, apply the result to the session store, and make sure a
  * daemon is running. Providers own only their translation and environment.
  *
+ * A provider that tracks overlapping work (tools, subagents, permission waits)
+ * uses `runLedgerHook` instead: its translation reads the session's previous
+ * ledger and returns the next one, and the read, the translation, the ledger
+ * write and the marker write all happen under the session's cross-process
+ * lock, so concurrent hooks can neither lose an operation nor write markers
+ * out of order.
+ *
  * Hard rule: the hook path must NEVER throw or hang — it runs inside the
  * coding tool's hook execution. Everything is wrapped; errors are swallowed
  * and we still succeed, with no output.
@@ -59,18 +66,25 @@ export interface HookStore {
   end(identity: SessionIdentity): void;
 }
 
+/** A store that also serializes a session's provider-owned ledger. */
+export interface LedgerHookStore extends HookStore {
+  withLock<T>(identity: SessionIdentity, fn: () => T): T;
+  readLedger(identity: SessionIdentity): unknown;
+  writeLedger(identity: SessionIdentity, ledger: unknown): void;
+}
+
 /** Runtime boundary for a short-lived provider hook process. */
-export interface HookRuntime {
+export interface HookRuntime<Store extends HookStore = HookStore> {
   readInput: () => string;
   now: () => number;
   environment: () => TranslateEnv;
   root: () => string;
-  createStore: (root: string) => HookStore;
+  createStore: (root: string) => Store;
   ensureDaemon: (root: string) => void;
 }
 
 /** The real process runtime, given the provider's environment fallbacks. */
-export function defaultHookRuntime(environment: () => TranslateEnv): HookRuntime {
+export function defaultHookRuntime(environment: () => TranslateEnv): HookRuntime<SessionStore> {
   return {
     readInput: readStdin,
     now: Date.now,
@@ -101,17 +115,61 @@ export async function runProviderHook(
     if (!result) return;
 
     const root = runtime.root();
-    const store = runtime.createStore(root);
-    if (result.kind === 'end') {
-      store.end(result.identity);
-      return;
-    }
-    store.record(result.identity, result.patch, now, result.activityChanged);
+    apply(runtime.createStore(root), result, now);
+    if (result.kind === 'update') runtime.ensureDaemon(root);
+  } catch {
+    // A broken presence tool must never break the coding tool.
+  }
+}
 
-    // Any non-end event means the session is active, so make sure a daemon is
-    // up — this self-heals after idle, a mid-session install, or a daemon crash.
-    // (end returned above, so we never resurrect a daemon for a dying session.)
-    runtime.ensureDaemon(root);
+function apply(store: HookStore, result: NonNullable<Translation>, now: number): void {
+  if (result.kind === 'end') store.end(result.identity);
+  else store.record(result.identity, result.patch, now, result.activityChanged);
+}
+
+/** One event's outcome for a ledger-backed provider. */
+export interface LedgerStep {
+  translation: Translation;
+  /** The session's ledger after this event; null removes it. */
+  ledger: unknown;
+}
+
+/**
+ * Parse one event from raw stdin. Returns the session it belongs to and the
+ * step to run against that session's previous ledger (null when there is
+ * none or it is unreadable), or null to ignore the event.
+ */
+export type LedgerTranslator = (
+  event: string,
+  raw: string,
+  now: number,
+  env: TranslateEnv,
+) => { identity: SessionIdentity; step: (ledger: unknown) => LedgerStep } | null;
+
+export async function runLedgerHook(
+  args: string[],
+  translate: LedgerTranslator,
+  runtime: HookRuntime<LedgerHookStore>,
+): Promise<void> {
+  try {
+    const event = args[0] ?? 'unknown';
+    const now = runtime.now();
+    const pending = translate(event, runtime.readInput(), now, runtime.environment());
+    if (!pending) return;
+
+    const root = runtime.root();
+    const store = runtime.createStore(root);
+    const result = store.withLock(pending.identity, () => {
+      const { translation, ledger } = pending.step(store.readLedger(pending.identity));
+      if (!translation) return null;
+      // An end removes the ledger with the marker.
+      if (translation.kind === 'update') store.writeLedger(pending.identity, ledger);
+      apply(store, translation, now);
+      return translation;
+    });
+    // The daemon starts outside the lock so a slow spawn never holds up the
+    // session's next hook; as above, an end never starts it.
+    if (result?.kind === 'update') runtime.ensureDaemon(root);
   } catch {
     // A broken presence tool must never break the coding tool.
   }
