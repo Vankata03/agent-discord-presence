@@ -28,6 +28,14 @@ export function codexHome(): string {
   return process.env.CODEX_HOME || path.join(os.homedir(), '.codex');
 }
 
+/**
+ * Gemini CLI's user config directory. GEMINI_CLI_HOME replaces the home
+ * directory it lives in, not the directory itself: `<home>/.gemini`.
+ */
+export function geminiDir(): string {
+  return path.join(process.env.GEMINI_CLI_HOME || os.homedir(), '.gemini');
+}
+
 /** Claude Code's settings file we add hooks to. */
 export function settingsPath(): string {
   return path.join(claudeDir(), 'settings.json');
