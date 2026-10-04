@@ -2,7 +2,8 @@ import { afterEach, beforeEach, test } from 'node:test';
 import assert from 'node:assert/strict';
 import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { SessionStore } from '../src/core/session-store';
 import {
   CODEX_HOOK_EVENTS,
@@ -14,6 +15,8 @@ import { SESSION_AGENT_STALE_MS } from '../src/provider/codex-ledger';
 import type { HookRuntime, LedgerHookStore } from '../src/provider/hook-runner';
 import type { TranslateEnv } from '../src/provider/types';
 import type { SessionIdentity, SessionMarker } from '../src/types';
+
+const HERE = dirname(fileURLToPath(import.meta.url));
 
 const NOW = 1_700_000_000_000;
 const ENV: TranslateEnv = { cwd: '/home/me/fallback-proj' };
@@ -385,7 +388,7 @@ test('an unreadable ledger starts empty instead of failing', () => {
 
 /** Replay a captured Codex 0.160.0 hook log; returns event and activity per line. */
 function replay(fixture: string): Array<[string, string]> {
-  const lines = readFileSync(join(import.meta.dirname, 'fixtures/codex/0.160.0', fixture), 'utf8')
+  const lines = readFileSync(join(HERE, 'fixtures/codex/0.160.0', fixture), 'utf8')
     .trim()
     .split('\n')
     .map((line) => JSON.parse(line) as { event: string; payload: CodexHookPayload });

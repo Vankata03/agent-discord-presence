@@ -1,8 +1,17 @@
 import { afterEach, beforeEach, test } from 'node:test';
 import assert from 'node:assert/strict';
-import { appendFileSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import {
+  appendFileSync,
+  mkdtempSync,
+  readFileSync,
+  renameSync,
+  rmSync,
+  utimesSync,
+  writeFileSync,
+} from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { renderPresence } from '../src/core/presence';
 import { SessionStore } from '../src/core/session-store';
 import { createReconcileTick, type PresenceSink } from '../src/daemon/reconcile';
@@ -10,7 +19,9 @@ import { readCodexRollout } from '../src/provider/codex-rollout';
 import { createEnrichmentDispatcher } from '../src/provider/enrichment';
 import type { PresencePayload, Theme } from '../src/types';
 
-const FIXTURE = join(import.meta.dirname, 'fixtures/codex/0.160.0/rollout.jsonl');
+const HERE = dirname(fileURLToPath(import.meta.url));
+
+const FIXTURE = join(HERE, 'fixtures/codex/0.160.0/rollout.jsonl');
 const LINES = readFileSync(FIXTURE, 'utf8').trim().split('\n');
 
 let dir: string;
@@ -110,6 +121,21 @@ test('a rewritten (shorter) rollout is read again from the start', () => {
   assert.deepEqual(read(), { model: 'gpt-5.5-codex', tokens: 900 });
   writeFileSync(path, META + tokens(4));
   assert.deepEqual(read(), { tokens: 4 });
+});
+
+test('a rollout rewritten in place at the same size, or replaced, is read again', () => {
+  writeFileSync(path, META + turn('gpt-5.5-codex') + tokens(111));
+  assert.deepEqual(read(), { model: 'gpt-5.5-codex', tokens: 111 });
+  writeFileSync(path, META + turn('gpt-5.6-codex') + tokens(222));
+  const later = new Date(Date.now() + 5_000);
+  utimesSync(path, later, later);
+  assert.deepEqual(read(), { model: 'gpt-5.6-codex', tokens: 222 });
+
+  const replacement = join(dir, 'replacement.jsonl');
+  writeFileSync(replacement, META + turn('gpt-5.7-codex') + tokens(333));
+  utimesSync(replacement, later, later);
+  renameSync(replacement, path);
+  assert.deepEqual(read(), { model: 'gpt-5.7-codex', tokens: 333 });
 });
 
 test('a missing rollout or reference yields no facts', () => {

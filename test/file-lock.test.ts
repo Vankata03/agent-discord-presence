@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, test } from 'node:test';
 import assert from 'node:assert/strict';
-import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdtempSync, readFileSync, rmSync, utimesSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { LockTimeoutError, withFileLock } from '../src/core/file-lock';
@@ -74,4 +74,24 @@ test('never removes a lock it no longer owns', () => {
     );
   });
   assert.equal(JSON.parse(readFileSync(lock, 'utf8')).token, 'someone-else');
+});
+
+test('an empty or unreadable lock is taken over only once it is old', () => {
+  const flat = join(dir, 'session.lock');
+  for (const body of ['', '{"pid":12', 'not json']) {
+    writeFileSync(flat, body);
+    // Fresh: its writer may still be between creating and writing it.
+    assert.throws(
+      () => withFileLock(flat, () => assert.fail('must not enter'), { timeoutMs: 30 }),
+      LockTimeoutError,
+      JSON.stringify(body),
+    );
+    const old = (Date.now() - 10_000) / 1000;
+    utimesSync(flat, old, old);
+    assert.equal(
+      withFileLock(flat, () => 'recovered', { staleAfterMs: 2_000 }),
+      'recovered',
+    );
+    assert.equal(existsSync(flat), false);
+  }
 });

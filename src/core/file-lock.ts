@@ -10,14 +10,17 @@
  * The lock is a file created exclusively (`wx`) that holds the owner's pid and
  * a random token. A waiter takes it over when the owner process is gone or has
  * held it past `staleAfterMs`, so a hook killed by its coding tool's timeout
- * never blocks the next one. Waiting is bounded: past `timeoutMs` the call
- * throws, and the hook runner's fail-open path drops that one update.
+ * never blocks the next one. A lock file that can't be read (its writer died
+ * between creating and writing it) is taken over once its mtime is that old,
+ * so a writer still inside that window keeps it. Waiting is bounded: past
+ * `timeoutMs` the call throws, and the hook runner's fail-open path drops that
+ * one update.
  *
  * Synchronous on purpose: hooks are short-lived processes that must finish
  * fast, and the waits are a few milliseconds.
  */
 import { randomBytes } from 'node:crypto';
-import { mkdirSync, renameSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { dirname } from 'node:path';
 import { isProcessAlive } from './daemon-state';
 import { readJson } from './json-file';
@@ -72,11 +75,20 @@ export function withFileLock<T>(path: string, fn: () => T, options: FileLockOpti
       if ((err as NodeJS.ErrnoException).code !== 'EEXIST') throw err;
     }
     const held = readJson<LockOwner>(path);
-    const abandoned =
-      held !== null &&
-      (!isAlive(held.pid) || !Number.isFinite(held.at) || now() - held.at > staleAfterMs);
+    let abandoned: boolean;
+    if (held === null) {
+      let modifiedAt: number;
+      try {
+        modifiedAt = statSync(path).mtimeMs;
+      } catch {
+        continue; // released meanwhile: retry the create
+      }
+      abandoned = now() - modifiedAt > staleAfterMs;
+    } else {
+      abandoned = !isAlive(held.pid) || !Number.isFinite(held.at) || now() - held.at > staleAfterMs;
+    }
     if (abandoned) {
-      takeOver(path, held);
+      takeOver(path, held?.token);
       continue;
     }
     if (now() >= deadline) throw new LockTimeoutError(path);
@@ -95,7 +107,7 @@ export function withFileLock<T>(path: string, fn: () => T, options: FileLockOpti
  * waiter that lost the race to a fresh owner puts the fresh lock back instead
  * of deleting it.
  */
-function takeOver(path: string, abandoned: LockOwner): void {
+function takeOver(path: string, abandonedToken: string | undefined): void {
   const aside = `${path}.${process.pid}.${randomBytes(4).toString('hex')}.stale`;
   try {
     renameSync(path, aside);
@@ -103,7 +115,7 @@ function takeOver(path: string, abandoned: LockOwner): void {
     return; // someone else moved it first
   }
   const moved = readJson<LockOwner>(aside);
-  if (moved && moved.token !== abandoned.token) {
+  if (moved && moved.token !== abandonedToken) {
     try {
       renameSync(aside, path); // a fresh owner's lock: restore it
       return;

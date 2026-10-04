@@ -31,6 +31,8 @@ export interface RolloutFacts {
 
 interface CacheEntry {
   path: string;
+  /** Identifies the file itself, so a replacement at the same path is noticed. */
+  ino: number;
   /** Bytes consumed so far: always the end of a complete line. */
   offset: number;
   size: number;
@@ -134,9 +136,16 @@ export function readCodexRollout(rolloutPath?: string, identity?: SessionIdentit
     const st = fstatSync(fd);
     const key = cacheKey(rolloutPath, identity);
     let entry = cache.get(key);
-    // A different file, or one that shrank (rewritten), is read from the start.
-    if (!entry || entry.path !== rolloutPath || st.size < entry.offset) {
-      entry = { path: rolloutPath, offset: 0, size: 0, mtimeMs: 0, facts: {} };
+    // A different or replaced file, or one rewritten rather than appended to
+    // (it shrank, or changed without growing), is read from the start.
+    if (
+      !entry ||
+      entry.path !== rolloutPath ||
+      entry.ino !== st.ino ||
+      st.size < entry.offset ||
+      (st.size === entry.size && st.mtimeMs !== entry.mtimeMs)
+    ) {
+      entry = { path: rolloutPath, ino: st.ino, offset: 0, size: 0, mtimeMs: 0, facts: {} };
     }
     if (entry.size !== st.size || entry.mtimeMs !== st.mtimeMs) {
       readAppended(entry, fd, st.size);

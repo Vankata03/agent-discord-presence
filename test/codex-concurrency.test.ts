@@ -3,12 +3,15 @@ import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
 import { existsSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { SessionStore } from '../src/core/session-store';
 import { parseLedger } from '../src/provider/codex-ledger';
 
+const HERE = dirname(fileURLToPath(import.meta.url));
+
 const WORKERS = 6;
-const WORKER = join(import.meta.dirname, 'helpers/codex-hook-worker.ts');
+const WORKER = join(HERE, 'helpers/codex-hook-worker.ts');
 const ID = { provider: 'codex', sessionId: 'shared' } as const;
 
 let root: string;
