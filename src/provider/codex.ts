@@ -9,18 +9,35 @@
  * skips starting the daemon.
  *
  * Codex reports the root session's `session_id` on every event, including
- * those from inside a subagent (which adds `agent_id`), and subagents fire
- * `SubagentStart`/`SubagentStop` instead of their own session start and end,
- * so all of a session's work lands on one marker.
+ * those from inside a subagent, which add `agent_id` (and carry the
+ * subagent's own `turn_id`, `model` and rollout `transcript_path`).
+ * Subagents fire `SubagentStart`/`SubagentStop` instead of their own session
+ * start and end, so all of a session's work lands on one marker, and only
+ * root events set the session's working directory, model and rollout.
  *
- * This is the basic, stateless mapping: each event sets the activity it
- * implies. Overlapping tools and subagents, where one finishing must not hide
- * another still running, need the per-session activity ledger (#15).
+ * Overlapping tools, subagents and permission waits are tracked in the
+ * session's ledger (codex-ledger.ts), which the hook updates under the
+ * session lock (runLedgerHook), so one operation finishing never hides
+ * another that is still running.
  */
 import { basename } from 'node:path';
-import type { ActivityState, SessionMarkerPatch } from '../types';
-import { defaultHookRuntime, parsePayload, runProviderHook, type HookRuntime } from './hook-runner';
-import type { TranslateEnv, Translation } from './types';
+import type { SessionIdentity, SessionMarkerPatch } from '../types';
+import {
+  applyEvent,
+  parseLedger,
+  visibleActivity,
+  type Activity,
+  type LedgerEvent,
+} from './codex-ledger';
+import {
+  defaultHookRuntime,
+  parsePayload,
+  runLedgerHook,
+  type HookRuntime,
+  type LedgerHookStore,
+  type LedgerStep,
+} from './hook-runner';
+import type { TranslateEnv } from './types';
 
 /** Codex event name and the normalized event argument passed to VDP. */
 export const CODEX_HOOK_EVENTS: ReadonlyArray<{ name: string; arg: string }> = [
@@ -49,22 +66,23 @@ export interface CodexHookPayload {
   source?: string;
   tool_name?: string;
   tool_input?: unknown;
+  /** Pre/PostToolUse: pairs a tool's start with its completion. */
+  tool_use_id?: string;
+  /** Present on events from inside a subagent, and on SubagentStart/Stop. */
+  agent_id?: string;
 }
-
-interface Activity {
-  state: ActivityState;
-  activity: string;
-  file?: string;
-}
-
-const THINKING: Activity = { state: 'thinking', activity: 'Thinking' };
-const IDLE: Activity = { state: 'idle', activity: 'Idle' };
 
 const EDIT_TOOLS = new Set(['apply_patch', 'Edit', 'Write', 'MultiEdit', 'NotebookEdit']);
 const COMMAND_TOOLS = new Set(['Bash', 'shell', 'local_shell', 'exec_command', 'write_stdin']);
 const SEARCH_TOOLS = new Set(['read_file', 'Read', 'list_dir', 'LS', 'grep_files', 'Grep', 'Glob']);
 const WEB_TOOLS = new Set(['web_search', 'web_fetch', 'WebSearch', 'WebFetch']);
 const AGENT_TOOLS = new Set(['spawn_agent', 'Agent', 'Task']);
+/** Codex prefixes namespaced tools with the namespace, e.g. `collaborationspawn_agent`. */
+const AGENT_NAMESPACE = 'collaboration';
+
+function nonEmpty(value: unknown): string | undefined {
+  return typeof value === 'string' && value !== '' ? value : undefined;
+}
 
 /** A filename only from an explicit path field — never parsed out of patch or command text. */
 function explicitFile(input: unknown): string | undefined {
@@ -75,7 +93,7 @@ function explicitFile(input: unknown): string | undefined {
 }
 
 function toolActivity(payload: CodexHookPayload): Activity {
-  const tool = payload.tool_name ?? '';
+  const tool = nonEmpty(payload.tool_name) ?? '';
   if (EDIT_TOOLS.has(tool)) {
     const file = explicitFile(payload.tool_input);
     return { state: 'editing', activity: file ? `Editing ${file}` : 'Editing', file };
@@ -91,31 +109,46 @@ function toolActivity(payload: CodexHookPayload): Activity {
   if (WEB_TOOLS.has(tool) || tool.startsWith('browser')) {
     return { state: 'browsing', activity: 'Browsing the web' };
   }
-  if (AGENT_TOOLS.has(tool)) return { state: 'delegating', activity: 'Running a subagent' };
+  if (AGENT_TOOLS.has(tool) || tool === `${AGENT_NAMESPACE}spawn_agent`) {
+    return { state: 'delegating', activity: 'Running a subagent' };
+  }
+  if (tool.startsWith(AGENT_NAMESPACE)) {
+    return { state: 'delegating', activity: 'Coordinating subagents' };
+  }
+  if (tool === 'request_user_input') {
+    return { state: 'waiting', activity: 'Waiting for your answer' };
+  }
+  if (tool === 'view_image') return { state: 'searching', activity: 'Viewing an image' };
   // MCP (`mcp__server__tool`) and anything new stay valid through the fallback.
   return { state: 'running', activity: tool ? `Using ${tool}` : 'Working' };
 }
 
-/** The visible activity an event implies, or null when it only proves liveness. */
-function activityFor(event: string, payload: CodexHookPayload): Activity | null {
+/** The ledger event a hook event implies, or null when it only proves liveness. */
+function ledgerEvent(event: string, payload: CodexHookPayload): LedgerEvent | null {
+  const agent = nonEmpty(payload.agent_id);
+  const tool = {
+    agent,
+    toolUseId: nonEmpty(payload.tool_use_id),
+    toolName: nonEmpty(payload.tool_name),
+  };
   switch (event) {
     case 'session-start':
-      return payload.source === 'compact'
-        ? null
-        : { state: 'idle', activity: 'Starting a session' };
+      return payload.source === 'compact' ? null : { kind: 'session-start' };
     case 'user-prompt-submit':
-    case 'post-tool-use':
-    case 'subagent-stop':
-      return THINKING;
+      return { kind: 'prompt', agent };
     case 'pre-tool-use':
-      return toolActivity(payload);
+      return { kind: 'pre-tool', ...tool, activity: toolActivity(payload) };
+    case 'post-tool-use':
+      return { kind: 'post-tool', ...tool };
     case 'permission-request':
-      return { state: 'waiting', activity: 'Waiting for permission' };
+      return { kind: 'permission', ...tool };
     case 'subagent-start':
-      return { state: 'delegating', activity: 'Running a subagent' };
+      return { kind: 'subagent-start', agent };
+    case 'subagent-stop':
+      return { kind: 'subagent-stop', agent };
     case 'stop':
     case 'interrupt':
-      return IDLE;
+      return { kind: 'turn-end', agent };
     default:
       // Compaction and unknown events keep the session alive without
       // replacing what it is visibly doing.
@@ -123,52 +156,83 @@ function activityFor(event: string, payload: CodexHookPayload): Activity | null 
   }
 }
 
+/** The session an event belongs to, or null when it can't be attributed. */
+export function codexIdentity(
+  payload: CodexHookPayload | null,
+  env: TranslateEnv,
+): SessionIdentity | null {
+  const id = nonEmpty(payload?.session_id) ?? env.sessionId;
+  return id ? { provider: 'codex', sessionId: id } : null;
+}
+
 /**
- * Translate one Codex hook event into a marker update. Pure: `now` and the
- * environment are passed in, and a malformed (null) payload is treated as
- * empty so the fallbacks decide.
+ * Translate one Codex hook event against the session's previous ledger.
+ * Pure: `now`, the environment and the ledger are passed in, and a malformed
+ * (null) payload is treated as empty so the fallbacks decide.
  */
 export function translate(
   event: string,
   payload: CodexHookPayload | null,
   now: number,
   env: TranslateEnv,
-): Translation {
+  previous: unknown = null,
+): LedgerStep {
   const p = payload ?? {};
-  const id = typeof p.session_id === 'string' && p.session_id ? p.session_id : env.sessionId;
-  if (!id) return null; // can't attribute activity without a session id
+  const identity = codexIdentity(p, env);
+  if (!identity) return { translation: null, ledger: previous }; // can't attribute it
+  if (event === 'session-end') return { translation: { kind: 'end', identity }, ledger: null };
 
-  const identity = { provider: 'codex', sessionId: id } as const;
-  if (event === 'session-end') return { kind: 'end', identity };
-
-  const cwd = typeof p.cwd === 'string' && p.cwd ? p.cwd : env.cwd;
-  const patch: SessionMarkerPatch = { cwd, project: basename(cwd) };
-  if (typeof p.model === 'string' && p.model) patch.model = p.model;
-  if (typeof p.transcript_path === 'string' && p.transcript_path) {
-    patch.enrichmentRef = p.transcript_path;
+  const fromSubagent = nonEmpty(p.agent_id) !== undefined;
+  // A subagent can still be finishing a hook after the root's SessionEnd
+  // removed the session; that late event must not bring the session back.
+  if (fromSubagent && (previous === null || previous === undefined)) {
+    return { translation: null, ledger: null };
   }
 
-  const activity = activityFor(event, p);
-  if (activity) {
+  const patch: SessionMarkerPatch = {};
+  // A subagent's events carry its own model and rollout; the card shows the root's.
+  if (!fromSubagent) {
+    const cwd = nonEmpty(p.cwd) ?? env.cwd;
+    patch.cwd = cwd;
+    patch.project = basename(cwd);
+    const model = nonEmpty(p.model);
+    if (model) patch.model = model;
+    const rollout = nonEmpty(p.transcript_path);
+    if (rollout) patch.enrichmentRef = rollout;
+  }
+
+  let ledger = parseLedger(previous);
+  const change = ledgerEvent(event, p);
+  if (change) {
+    ledger = applyEvent(ledger, change, now);
+    const activity: Activity = visibleActivity(ledger);
     patch.state = activity.state;
     patch.activity = activity.activity;
     patch.file = activity.file;
   }
   // startup, resume, clear and fork begin a session as far as the user is
   // concerned; a compaction is mid-session housekeeping and keeps the timer.
-  if (event === 'session-start' && p.source !== 'compact') patch.startedAt = now;
-  return { kind: 'update', identity, patch, activityChanged: activity !== null };
+  if (change?.kind === 'session-start') patch.startedAt = now;
+  return {
+    translation: { kind: 'update', identity, patch, activityChanged: change !== null },
+    ledger,
+  };
 }
 
 const DEFAULT_HOOK_RUNTIME = defaultHookRuntime(() => ({ cwd: process.cwd() }));
 
 export async function runHook(
   args: string[] = [],
-  runtime: HookRuntime = DEFAULT_HOOK_RUNTIME,
+  runtime: HookRuntime<LedgerHookStore> = DEFAULT_HOOK_RUNTIME,
 ): Promise<void> {
-  return runProviderHook(
+  return runLedgerHook(
     args,
-    (event, raw, now, env) => translate(event, parsePayload<CodexHookPayload>(raw), now, env),
+    (event, raw, now, env) => {
+      const payload = parsePayload<CodexHookPayload>(raw);
+      const identity = codexIdentity(payload, env);
+      if (!identity) return null;
+      return { identity, step: (ledger) => translate(event, payload, now, env, ledger) };
+    },
     runtime,
   );
 }
