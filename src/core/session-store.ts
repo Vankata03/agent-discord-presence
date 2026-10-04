@@ -12,12 +12,18 @@
  * session-end, or be briefly idle); one whose heartbeat is far older is
  * abandoned and pruned from disk so orphans never accumulate.
  *
+ * A provider that tracks overlapping work keeps a ledger beside the marker
+ * (same digest, `.ledger.json`) and updates both under the session's
+ * cross-process lock (`withLock`), so concurrent hooks for one session never
+ * lose each other's updates. Ending or pruning a session removes its ledger.
+ *
  * The store is constructed with an explicit root so tests exercise the real
  * marker format in a temporary directory.
  */
 import { createHash } from 'node:crypto';
 import { readdirSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
+import { withFileLock, type FileLockOptions } from './file-lock';
 import { readJson, writeJsonAtomic } from './json-file';
 import { PROVIDER_KEYS } from '../types';
 import type { AggregatedState, SessionIdentity, SessionMarker, SessionMarkerPatch } from '../types';
@@ -39,6 +45,8 @@ export interface SessionStoreOptions {
   staleAfterMs?: number;
   /** Heartbeat age past which a marker is deleted from disk. */
   pruneAfterMs?: number;
+  /** Timing of the per-session lock. */
+  lock?: FileLockOptions;
 }
 
 /**
@@ -91,12 +99,14 @@ export class SessionStore {
   private readonly dir: string;
   private readonly staleAfterMs: number;
   private readonly pruneAfterMs: number;
+  private readonly lockOptions: FileLockOptions;
 
   /** `root` is the presence directory; markers live in its `sessions/` folder. */
   constructor(root: string, options: SessionStoreOptions = {}) {
     this.dir = join(root, 'sessions');
     this.staleAfterMs = options.staleAfterMs ?? STALE_AFTER_MS;
     this.pruneAfterMs = options.pruneAfterMs ?? PRUNE_AFTER_MS;
+    this.lockOptions = options.lock ?? {};
   }
 
   /**
@@ -106,6 +116,33 @@ export class SessionStore {
   private markerPath(identity: SessionIdentity): string {
     validateIdentity(identity);
     return join(this.dir, identity.provider, markerFileName(identity.sessionId));
+  }
+
+  /** A per-session file beside the marker, e.g. `<digest>.ledger.json`. */
+  private sidecarPath(identity: SessionIdentity, suffix: string): string {
+    return this.markerPath(identity).replace(/\.json$/, suffix);
+  }
+
+  /**
+   * Run `fn` holding this session's cross-process lock. Everything a hook
+   * reads and writes for the session inside `fn` is serialized against every
+   * other hook for the same session. Throws when the lock can't be acquired in
+   * time (the hook runner swallows it).
+   */
+  withLock<T>(identity: SessionIdentity, fn: () => T): T {
+    return withFileLock(this.sidecarPath(identity, '.lock'), fn, this.lockOptions);
+  }
+
+  /** The provider-owned ledger for a session, or null when it has none. */
+  readLedger(identity: SessionIdentity): unknown {
+    return readJson<unknown>(this.sidecarPath(identity, '.ledger.json'));
+  }
+
+  /** Replace a session's ledger; null removes it. Call inside `withLock`. */
+  writeLedger(identity: SessionIdentity, ledger: unknown): void {
+    const path = this.sidecarPath(identity, '.ledger.json');
+    if (ledger === null || ledger === undefined) rmSync(path, { force: true });
+    else writeJsonAtomic(path, ledger);
   }
 
   /**
@@ -134,13 +171,14 @@ export class SessionStore {
     writeJsonAtomic(path, merged);
   }
 
-  /** Remove a session's marker. Idempotent: a marker already gone is fine. */
+  /** Remove a session's marker and ledger. Idempotent: files already gone are fine. */
   end(identity: SessionIdentity): void {
-    const path = this.markerPath(identity);
-    try {
-      rmSync(path);
-    } catch {
-      // already gone — fine
+    for (const path of [this.markerPath(identity), this.sidecarPath(identity, '.ledger.json')]) {
+      try {
+        rmSync(path);
+      } catch {
+        // already gone — fine
+      }
     }
   }
 
@@ -193,6 +231,7 @@ export class SessionStore {
   }
 }
 
+/** Throw unless the provider is known and the session id is safe to hash into a path. */
 function validateIdentity(identity: SessionIdentity): void {
   if (!PROVIDERS.has(identity.provider)) {
     throw new Error(`invalid provider: ${JSON.stringify(identity.provider)}`);
@@ -203,6 +242,7 @@ function validateIdentity(identity: SessionIdentity): void {
   }
 }
 
+/** `validateIdentity` as a predicate, for filtering markers. */
 function isValidIdentity(identity: SessionIdentity): boolean {
   try {
     validateIdentity(identity);
@@ -212,12 +252,14 @@ function isValidIdentity(identity: SessionIdentity): boolean {
   }
 }
 
+/** Stable order of identities: the final tie-breaker when choosing the current session. */
 function compareIdentity(a: SessionIdentity, b: SessionIdentity): number {
   const aKey = `${a.provider}\0${a.sessionId}`;
   const bKey = `${b.provider}\0${b.sessionId}`;
   return aKey < bKey ? -1 : aKey > bKey ? 1 : 0;
 }
 
+/** A marker's file name: the SHA-256 of the raw session id, never the id itself. */
 function markerFileName(sessionId: string): string {
   return `${createHash('sha256').update(sessionId).digest('hex')}.json`;
 }
